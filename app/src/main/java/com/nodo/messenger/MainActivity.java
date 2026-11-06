@@ -26,13 +26,21 @@ import org.json.JSONObject;
 import java.io.*;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import com.nodo.messenger.ui.NodoTheme;
+import com.nodo.messenger.ui.NodoBottomBar;
+import com.nodo.messenger.data.ChatRepository;
+import com.nodo.messenger.domain.MessageRecord;
+import com.nodo.messenger.transport.NearbyTransport;
+import com.nodo.messenger.transport.LanTransport;
+import com.nodo.messenger.transport.PlannedTransport;
 
 /** First alpha: a native UI, LAN discovery, user-approved pairing, chat, files, notes and voice calls. */
 public final class MainActivity extends Activity implements LocalNode.Listener {
-    private static final int GREEN=Color.rgb(32,202,145), DARK=Color.rgb(19,36,51), MUTED=Color.rgb(107,123,134);
-    private static final int PALE=Color.rgb(225,252,239), BG=Color.rgb(248,251,253), BLUE=Color.rgb(65,174,231);
-    private static final int REQUEST_DOC=41,REQUEST_PHOTO=42,REQUEST_MIC=43;
-    private Store store; private LocalNode node; private NodoService nodoService;
+    private static final int GREEN=NodoTheme.EMERALD, DARK=NodoTheme.INK, MUTED=NodoTheme.SECONDARY;
+    private static final int PALE=NodoTheme.MINT, BG=NodoTheme.BACKGROUND, BLUE=NodoTheme.BLUE;
+    private static final int REQUEST_DOC=41,REQUEST_PHOTO=42,REQUEST_MIC=43,REQUEST_CAMERA=44;
+    private Store store; private ChatRepository chats; private LocalNode node; private NodoService nodoService;
+    private String chatFilter="all";
     private boolean bound=false,bindRequested=false;
     private final ServiceConnection connection=new ServiceConnection(){
         @Override public void onServiceConnected(ComponentName name,IBinder binder){
@@ -79,6 +87,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         if (Build.VERSION.SDK_INT >= 30) getWindow().setDecorFitsSystemWindows(false);
         NodeAlerts.setup(this);
         store=new Store(this);
+        chats=new ChatRepository(store);
         renderDisconnected();
         if(store.backgroundEnabled()){
             try{NodoService.start(this);}catch(Exception ex){
@@ -256,18 +265,16 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     }
     private TextView button(String label,Runnable action){
         TextView t=txt(label,15,Color.WHITE,true);t.setGravity(Gravity.CENTER);pad(t,15,12,15,12);
-        t.setBackground(gradient());t.setOnClickListener(w->action.run());return t;
+        t.setBackground(NodoTheme.primary(this));t.setElevation(dp(2));t.setOnClickListener(w->action.run());return t;
     }
     private void title(LinearLayout l,String text,String subtitle){
-        TextView t=txt(text,24,DARK,true);l.addView(t);
+        TextView t=txt(text,25,DARK,true);l.addView(t);
         if(subtitle!=null&&!subtitle.isEmpty()){
             TextView s=txt(subtitle,13,MUTED,false);LinearLayout.LayoutParams p=lp(-1,-2);p.topMargin=dp(5);l.addView(s,p);
         }
     }
     private LinearLayout card(){
-        LinearLayout l=v();pad(l,17,16,17,16);
-        l.setBackground(border(Color.WHITE,22,Color.rgb(231,240,242)));
-        l.setElevation(dp(2));return l;
+        return NodoTheme.card(this);
     }
     private void ripple(View target,int backgroundColor,int radius){
         target.setBackground(new RippleDrawable(ColorStateList.valueOf(Color.argb(45,32,202,145)),shape(backgroundColor,radius),null));
@@ -314,7 +321,8 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         LinearLayout header=h();pad(header,18,12,18,9);header.setBackgroundColor(Color.WHITE);header.setElevation(dp(3));
         header.addView(imageLogo(38));TextView brand=txt("NODO",23,DARK,true);header.addView(brand);
         View space=new View(this);header.addView(space,new LinearLayout.LayoutParams(0,1,1));
-        TextView mini=txt("●  Red local",11,GREEN,true);header.addView(mini);
+        TextView mini=txt("● Wi-Fi local",11,NodoTheme.EMERALD_DARK,true);
+        mini.setBackground(shape(PALE,14));pad(mini,10,7,10,7);header.addView(mini);
         root.addView(header,lp(-1,62));
         ScrollView sv=new ScrollView(this);sv.setFillViewport(true);sv.setClipToPadding(false);
         LinearLayout body=v();pad(body,16,16,16,20);sv.addView(body);
@@ -325,23 +333,16 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         bottomNav();
     }
     private void bottomNav(){
-        LinearLayout nav=h();nav.setBackgroundColor(Color.WHITE);pad(nav,4,7,4,8);
-        String[] keys={"discover","chats","calls","files","settings"};
-        String[] icons={"◎","▤","☎","▣","⚙"};String[] names={"Cercanos","Chats","Llamadas","Archivos","Ajustes"};
-        for(int i=0;i<keys.length;i++){
-            final String k=keys[i];LinearLayout b=v();b.setGravity(Gravity.CENTER);pad(b,0,3,0,3);
-            TextView icon=txt(icons[i],23,k.equals(screen)?GREEN:MUTED,false);icon.setGravity(Gravity.CENTER);
-            TextView label=txt(names[i],10,k.equals(screen)?GREEN:MUTED,k.equals(screen));label.setGravity(Gravity.CENTER);
-            b.addView(icon);b.addView(label);nav.addView(b,new LinearLayout.LayoutParams(0,dp(53),1));
-            b.setOnClickListener(w->{screen=k;render();});
-        }
-        nav.setElevation(dp(5));root.addView(nav,lp(-1,66));
+        LinearLayout nav=NodoBottomBar.create(this,screen,key->{
+            screen=key;render();
+        });
+        root.addView(nav,lp(-1,67));
     }
     private void showDiscover(LinearLayout body){
         title(body,"Descubrir","Personas y dispositivos que usan NODO cerca de ti");gap(body,13);
         Radar r=new Radar(this);body.addView(r,lp(-1,180));gap(body,10);
         TextView banner=pill("●  "+networkStatus,false);body.addView(banner);gap(body,15);
-        LinearLayout row=h();row.addView(txt("Encontrados en Wi-Fi local",16,DARK,true),new LinearLayout.LayoutParams(0,-2,1));
+        LinearLayout row=h();row.addView(txt("Encontrados cerca",16,DARK,true),new LinearLayout.LayoutParams(0,-2,1));
         TextView hint=pill("↻ Buscar",true);hint.setOnClickListener(w->{toast("Búsqueda automática activa. Comprueba que ambos estén en la misma red Wi-Fi.");});row.addView(hint);body.addView(row);gap(body,10);
         List<LocalNode.Discovered> ds=node.nearby();ds.sort(Comparator.comparing(a->a.serviceName));
         if(ds.isEmpty()){
@@ -353,14 +354,14 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
             LinearLayout c=card();LinearLayout line=h();
             line.addView(match!=null?avatar(match,44):imageLogo(44));
             LinearLayout text=v();pad(text,11,0,6,0);text.addView(txt(name,15,DARK,true));
-            text.addView(txt(match!=null&&node.isConnected(match)?"● Conectado":"Disponible por Wi-Fi local",12,match!=null&&node.isConnected(match)?GREEN:MUTED,false));
+            text.addView(txt(match!=null&&node.isConnected(match)?"● Conectado":"Cerca · Wi-Fi local · sin distancia exacta",12,match!=null&&node.isConnected(match)?GREEN:MUTED,false));
             line.addView(text,new LinearLayout.LayoutParams(0,-2,1));
             TextView btn=pill(match!=null&&node.isConnected(match)?"Abrir":"Enlazar",true);
             btn.setOnClickListener(w->{if(match!=null&&node.isConnected(match)){currentPeer=match;screen="chat";render();}
                 else {node.connect(p);toast("Solicitando enlace. La otra persona debe autorizarlo.");}});
             line.addView(btn);c.addView(line);body.addView(c);gap(body,9);
         }
-        gap(body,10);body.addView(button("🔗  Crear enlace / compartir mi NODO",()->{
+        gap(body,10);body.addView(button("Crear enlace NODO",()->{
             new AlertDialog.Builder(this).setTitle("Tu enlace NODO")
                 .setMessage("Tu dispositivo ya está anunciándose como NODO-"+store.id().substring(0,8)+". Para enlazar, abre NODO en otro teléfono en la misma red Wi-Fi, entra en Cercanos y pulsa Enlazar. No necesitas acceso a internet.")
                 .setPositiveButton("Entendido",null).show();
@@ -368,27 +369,52 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         gap(body,12);body.addView(txt("Reconexión automática con contactos autorizados. Para recibir mensajes al cerrar la pantalla, activa Segundo plano en Ajustes.",12,MUTED,false));
     }
     private void showChats(LinearLayout body){
-        title(body,"Conversaciones","Cerca de ti, incluso sin internet");gap(body,14);
-        LinearLayout tabs=h();TextView all=pill("Todos",true), near=pill("Conectados",false), groups=pill("Grupos",false);
-        all.setOnClickListener(w->toast("Mostrando todas las conversaciones"));
-        near.setOnClickListener(w->showOnlineOnly());
-        groups.setOnClickListener(w->createGroupDialog());
-        tabs.addView(all);gapHorizontal(tabs,6);tabs.addView(near);gapHorizontal(tabs,6);tabs.addView(groups);
-        body.addView(tabs);gap(body,10);
-        TextView create=pill("＋ Crear grupo de NODO",true);
-        create.setOnClickListener(w->createGroupDialog());body.addView(create);gap(body,12);
-        List<String> ids=store.contacts();
-        if(ids.isEmpty()){
-            LinearLayout c=card();c.addView(txt("Empieza tu primera conversación",17,DARK,true));gap(c,6);
-            c.addView(txt("Ve a Cercanos, encuentra otro teléfono NODO y solicita el enlace.",13,MUTED,false));gap(c,12);
-            c.addView(button("Buscar personas",()->{screen="discover";render();}));body.addView(c);
+        title(body,"Chats","Tus conversaciones y grupos sin depender de internet");gap(body,15);
+        LinearLayout shortcuts=h();
+        String[] actions={"Mensajes","Llamadas","Archivos"};
+        for(int i=0;i<actions.length;i++){
+            final int selected=i;
+            TextView option=pill((i==0?"▤ ":i==1?"☎ ":"▣ ")+actions[i],i==0);
+            option.setOnClickListener(view->{
+                if(selected==0){chatFilter="all";render();}
+                else {screen=selected==1?"calls":"files";render();}
+            });
+            shortcuts.addView(option,new LinearLayout.LayoutParams(0,-2,1));
+            if(i<2)gapHorizontal(shortcuts,7);
         }
-        for(String gid:store.groups()){
-            String id="group:"+gid;
-            LinearLayout c=contactRow(id);c.setOnClickListener(w->openChat(id));body.addView(c);gap(body,8);
+        body.addView(shortcuts);gap(body,15);
+        LinearLayout filters=h();
+        String[] keys={"all","near","favorites"};
+        String[] labels={"Todos","Cercanos","Favoritos"};
+        for(int i=0;i<3;i++){
+            final String key=keys[i];TextView chip=pill(labels[i],chatFilter.equals(key));
+            chip.setOnClickListener(view->{chatFilter=key;render();});
+            filters.addView(chip);if(i<2)gapHorizontal(filters,8);
         }
-        for(String id:ids){
-            LinearLayout c=contactRow(id);c.setOnClickListener(w->openChat(id));body.addView(c);gap(body,8);
+        body.addView(filters);gap(body,16);
+        TextView create=pill("＋ Nuevo grupo",true);
+        create.setOnClickListener(w->createGroupDialog());body.addView(create);gap(body,15);
+        int listed=0;
+        if(chatFilter.equals("all"))for(String gid:store.groups()){
+            String id="group:"+gid;LinearLayout row=contactRow(id);
+            row.setOnClickListener(w->openChat(id));body.addView(row);gap(body,9);listed++;
+        }
+        for(String id:store.contacts()){
+            if(chatFilter.equals("near")&&!node.isConnected(id))continue;
+            if(chatFilter.equals("favorites")&&!chats.favorite(id))continue;
+            LinearLayout row=contactRow(id);
+            row.setOnClickListener(w->openChat(id));body.addView(row);gap(body,9);listed++;
+        }
+        if(listed==0){
+            LinearLayout empty=card();
+            empty.addView(txt(chatFilter.equals("favorites")?"Todavía no tienes favoritos":
+                chatFilter.equals("near")?"No hay contactos conectados":"Empieza tu primera conversación",17,DARK,true));
+            gap(empty,8);
+            empty.addView(txt(chatFilter.equals("favorites")?"Marca ☆ en la cabecera de un chat para guardarlo aquí.":
+                "Busca otro teléfono NODO en Descubrir y autoriza el enlace.",13,MUTED,false));
+            gap(empty,14);
+            if(!chatFilter.equals("favorites"))empty.addView(button("Descubrir personas",()->{screen="discover";render();}));
+            body.addView(empty);
         }
     }
     private void createGroupDialog(){
@@ -421,25 +447,36 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     }
     private void gapHorizontal(LinearLayout l,int width){l.addView(new View(this),lp(width,1));}
     private LinearLayout contactRow(String id){
-        LinearLayout outer=card();LinearLayout row=h();row.addView(avatar(id,50));
-        LinearLayout desc=v();pad(desc,12,0,0,0);desc.addView(txt(store.peerName(id),16,DARK,true));
-        JSONArray a=store.messages(id);JSONObject last=a.optJSONObject(a.length()-1);
-        String preview=last==null?"Toca para iniciar chat":last.optString("kind").equals("text")?last.optString("body"):last.optString("kind").equals("voice")?"🎙 Nota de voz":"📎 "+last.optString("name");
-        if(preview.length()>48)preview=preview.substring(0,48)+"…";
-        if(store.isGroup(id))preview="👥 "+store.groupMembers(id.substring(6)).size()+" integrantes · "+preview;
+        LinearLayout outer=card();LinearLayout row=h();row.addView(avatar(id,52));
+        LinearLayout desc=v();pad(desc,13,0,7,0);
+        LinearLayout heading=h();heading.addView(txt(store.peerName(id),16,DARK,true),new LinearLayout.LayoutParams(0,-2,1));
+        MessageRecord last=chats.latest(id);
+        if(last!=null){
+            String when=clock.format(new Date(last.timestamp));
+            TextView time=txt(when,11,MUTED,false);heading.addView(time);
+        }
+        desc.addView(heading);gap(desc,7);
+        String preview=last==null?"Toca para iniciar conversación":last.preview();
+        if(store.isGroup(id))preview="Grupo · "+preview;
+        if(preview.length()>45)preview=preview.substring(0,45)+"…";
         desc.addView(txt(preview,13,MUTED,false));
         row.addView(desc,new LinearLayout.LayoutParams(0,-2,1));
         boolean connected=node.isConnected(id);
-        if(store.isGroup(id)){
-            for(String member:store.groupMembers(id.substring(6)))if(node.isConnected(member))connected=true;
+        if(store.isGroup(id))for(String member:store.groupMembers(id.substring(6)))if(node.isConnected(member))connected=true;
+        int unread=chats.unread(id);
+        LinearLayout state=v();state.setGravity(Gravity.CENTER);
+        if(unread>0){
+            TextView count=txt(String.valueOf(Math.min(99,unread)),12,Color.WHITE,true);
+            count.setGravity(Gravity.CENTER);count.setBackground(shape(GREEN,15));
+            state.addView(count,lp(28,26));gap(state,5);
         }
-        TextView connection=txt(connected?"●":"○",21,connected?GREEN:MUTED,true);row.addView(connection);
-        outer.addView(row);return outer;
+        state.addView(txt(connected?"●":"○",18,connected?GREEN:MUTED,true));
+        row.addView(state);outer.addView(row);return outer;
     }
     private void showCalls(LinearLayout body){
         title(body,"Llamadas","Voz por Wi-Fi local con personas enlazadas");gap(body,13);
         LinearLayout c=card();c.addView(txt("Para llamar, abre un chat y toca ☎.",15,DARK,true));gap(c,5);
-        c.addView(txt("Las llamadas de voz funcionan mientras ambos teléfonos están conectados en la red local y la app está abierta. La videollamada se incorporará después.",13,MUTED,false));
+        c.addView(txt("Las llamadas de voz funcionan si ambos teléfonos están enlazados por Wi-Fi local y NODO tiene permiso para ejecutarse en segundo plano. La videollamada se incorporará después.",13,MUTED,false));
         body.addView(c);gap(body,12);
         for(String id:store.contacts())if(node.isConnected(id)){
             LinearLayout row=contactRow(id);row.setOnClickListener(w->call(id));body.addView(row);gap(body,8);
@@ -477,11 +514,11 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         settingsRow(body,"◎","Conectividad","Reconexión y tecnología de red",this::connectivitySettings);
         settingsRow(body,"◌","Segundo plano","Mantener NODO conectado al cerrar la pantalla",this::backgroundSettings);
         settingsRow(body,"▣","Almacenamiento y datos","Archivos de hasta 30 MB",this::storageSettings);
-        settingsRow(body,"♧","Dispositivos autorizados","Consultar y revocar confianza",this::privacySettings);
+        settingsRow(body,"♧","Dispositivos autorizados","Consultar y revocar confianza",this::trustedContactsDialog);
         settingsRow(body,"◐","Apariencia","Estilo original blanco y menta",()->info("Apariencia","NODO utiliza el diseño blanco, verde menta y azul elegido. Temas adicionales vendrán después."));
         settingsRow(body,"?","Ayuda","Cómo conectar dos Android",this::help);
         settingsRow(body,"↗","Invitar amigos","Compartir información sobre NODO",this::shareInvite);
-        gap(body,14);body.addView(txt("NODO Beta v0.5.0 · Versión experimental · Comunicaciones sin cifrado de extremo a extremo. Solo para pruebas.",12,MUTED,false));
+        gap(body,14);body.addView(txt("NODO Beta v0.6.0 · Versión experimental · Comunicaciones sin cifrado de extremo a extremo. Solo para pruebas.",12,MUTED,false));
     }
     private void settingsRow(LinearLayout body,String icon,String name,String sub,Runnable action){
         LinearLayout c=card();LinearLayout row=h();
@@ -490,7 +527,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         row.addView(content,new LinearLayout.LayoutParams(0,-2,1));row.addView(txt("›",23,MUTED,false));c.addView(row);
         c.setOnClickListener(w->action.run());body.addView(c);gap(body,8);
     }
-    private void openChat(String id){currentPeer=id;screen="chat";render();}
+    private void openChat(String id){currentPeer=id;screen="chat";chats.markRead(id);render();}
     private void showChat(){
         LinearLayout bar=h();pad(bar,10,10,14,10);bar.setBackgroundColor(Color.WHITE);bar.setElevation(dp(4));
         TextView back=glyph("‹",DARK,32);pad(back,4,0,10,0);back.setOnClickListener(w->{screen="chats";render();});bar.addView(back);
@@ -498,6 +535,14 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         LinearLayout who=v();pad(who,10,0,2,0);who.addView(txt(store.peerName(currentPeer),17,DARK,true));
         chatStatus=txt("",11,MUTED,false);who.addView(chatStatus);
         bar.addView(who,new LinearLayout.LayoutParams(0,-2,1));
+        if(!store.isGroup(currentPeer)){
+            TextView favorite=glyph(chats.favorite(currentPeer)?"★":"☆",GREEN,24);
+            pad(favorite,7,5,7,5);favorite.setContentDescription("Agregar o quitar de favoritos");
+            favorite.setOnClickListener(w->{
+                boolean status=!chats.favorite(currentPeer);chats.favorite(currentPeer,status);
+                favorite.setText(status?"★":"☆");toast(status?"Añadido a Favoritos":"Eliminado de Favoritos");
+            });bar.addView(favorite);
+        }
         TextView call=glyph("☎",GREEN,24);pad(call,7,5,7,5);
         call.setOnClickListener(w->{if(store.isGroup(currentPeer))startGroupCall(currentPeer.substring(6));else call(currentPeer);});bar.addView(call);
         TextView video=glyph("▣",GREEN,23);pad(video,7,5,3,5);video.setOnClickListener(w->featurePending("Videollamadas"));bar.addView(video);
@@ -549,7 +594,14 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
             int online=0;for(String member:store.groupMembers(currentPeer.substring(6)))if(node.isConnected(member))online++;
             connected=online>0;
             if(chatStatus!=null)chatStatus.setText("👥 "+online+" miembros conectados · Wi-Fi local");
-        }else if(chatStatus!=null){chatStatus.setText(connected?"●  Conectado por Wi-Fi local":"○  Sin conexión · textos en espera");chatStatus.setTextColor(connected?GREEN:MUTED);}
+        }else if(chatStatus!=null){
+            long lastSeen=store.peerLastSeen(currentPeer);
+            String offline=lastSeen>0?"Última conexión compartida: "+clock.format(new Date(lastSeen)):
+                "Sin conexión · textos en espera";
+            chatStatus.setText(connected?"●  Conectado por Wi-Fi local":offline);
+            chatStatus.setTextColor(connected?GREEN:MUTED);
+        }
+        if(foreground)chats.markRead(currentPeer);
         JSONArray items=store.messages(currentPeer);
         if(items.length()==chatCount && chatList.getChildCount()>0)return;
         chatList.removeAllViews();chatCount=items.length();
@@ -666,9 +718,51 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         audioPath="";
     }
     private void showAttachments(){
-        final String[] choices={"📷  Foto o imagen","📎  Documento o archivo","☺  Emojis","▧  Stickers"};
+        final String[] choices={"Galería","Cámara","Archivo / PDF","Contacto","Ubicación (escribir)","Emojis","Stickers"};
         new AlertDialog.Builder(this).setTitle("Compartir en NODO")
-            .setItems(choices,(d,which)->{if(which<2)pickFile();else showExpressionPicker(which==3);}).show();
+            .setItems(choices,(d,which)->{
+                if(which==0)pickImage();
+                else if(which==1)openCamera();
+                else if(which==2)pickFile();
+                else if(which==3)shareContact();
+                else if(which==4)sharePlace();
+                else showExpressionPicker(which==6);
+            }).show();
+    }
+    private void pickImage(){
+        if(!node.isConnected(currentPeer)){toast("Conecta primero con tu contacto");return;}
+        Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.setType("image/*");intent.addCategory(Intent.CATEGORY_OPENABLE);
+        startActivityForResult(intent,REQUEST_DOC);
+    }
+    private void openCamera(){
+        if(!node.isConnected(currentPeer)){toast("Conecta primero con tu contacto");return;}
+        Intent intent=new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
+        if(intent.resolveActivity(getPackageManager())!=null)startActivityForResult(intent,REQUEST_CAMERA);
+        else toast("No hay una cámara compatible disponible");
+    }
+    private void shareContact(){
+        List<String> ids=store.contacts();if(ids.isEmpty()){toast("Aún no tienes contactos enlazados");return;}
+        String[] names=new String[ids.size()];for(int i=0;i<ids.size();i++)names[i]=store.peerName(ids.get(i));
+        new AlertDialog.Builder(this).setTitle("Compartir contacto NODO")
+            .setItems(names,(d,which)->sendComposedText("Contacto NODO: "+names[which]+" · ID "+ids.get(which)))
+            .setNegativeButton("Cancelar",null).show();
+    }
+    private void sharePlace(){
+        EditText place=new EditText(this);place.setSingleLine(false);place.setHint("Escribe una dirección, lugar o coordenadas");
+        new AlertDialog.Builder(this).setTitle("Compartir ubicación")
+            .setMessage("NODO no consulta tu GPS automáticamente. Puedes compartir un lugar por texto.")
+            .setView(place).setPositiveButton("Enviar",(d,w)->{
+                String value=place.getText().toString().trim();
+                if(value.isEmpty()){toast("Indica un lugar para compartir");return;}
+                sendComposedText("📍 Ubicación: "+value);
+            }).setNegativeButton("Cancelar",null).show();
+    }
+    private void sendComposedText(String value){
+        if(nodoService==null){toast("Inicia la red NODO primero");return;}
+        if(store.isGroup(currentPeer))nodoService.queueGroupText(currentPeer.substring(6),value);
+        else nodoService.queueText(currentPeer,value);
+        refreshChatMessages();
     }
     private void showExpressionPicker(boolean startStickers){
         LinearLayout sheet=v();pad(sheet,14,12,14,8);sheet.setBackgroundColor(Color.WHITE);
@@ -969,14 +1063,40 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         }catch(Exception e){toast("No se pudo guardar la foto: "+e.getMessage());}
     }
     private void privacySettings(){
+        LinearLayout content=v();pad(content,19,9,19,9);
+        Switch visibility=new Switch(this);visibility.setText("Visible para usuarios cercanos");
+        visibility.setTextColor(DARK);visibility.setChecked(store.discoverable());
+        visibility.setOnCheckedChangeListener((v,on)->{
+            if(node!=null)node.setDiscoverable(on);else store.discoverable(on);
+            toast(on?"NODO visible en Wi-Fi local":"NODO dejó de anunciarse");
+        });content.addView(visibility);gap(content,11);
+        Switch unknown=new Switch(this);unknown.setText("Permitir solicitudes de desconocidos");
+        unknown.setTextColor(DARK);unknown.setChecked(store.allowNewPairing());
+        unknown.setOnCheckedChangeListener((v,on)->store.allowNewPairing(on));
+        content.addView(unknown);gap(content,11);
+        Switch lastSeen=new Switch(this);lastSeen.setText("Mostrar última conexión");
+        lastSeen.setTextColor(DARK);lastSeen.setChecked(store.shareLastSeen());
+        lastSeen.setOnCheckedChangeListener((v,on)->store.shareLastSeen(on));
+        content.addView(lastSeen);gap(content,12);
+        content.addView(txt("Los contactos ya autorizados pueden seguir conectándose aunque no anuncies tu NODO. "
+            +"La última conexión compartida dependerá del protocolo que usen ambos dispositivos.",12,MUTED,false));
+        gap(content,12);
+        content.addView(button("Administrar dispositivos autorizados",this::trustedContactsDialog),lp(-1,48));
+        new AlertDialog.Builder(this).setTitle("Privacidad")
+            .setView(content).setPositiveButton("Guardar",null).show();
+    }
+    private void trustedContactsDialog(){
         List<String> ids=store.contacts();String[] options=new String[ids.size()];
-        for(int i=0;i<ids.size();i++) options[i]=store.peerName(ids.get(i))+(store.trusted(ids.get(i))?" · autorizado":" · sin autorización");
-        new AlertDialog.Builder(this).setTitle("Dispositivos y privacidad")
-            .setMessage(ids.isEmpty()?"Todavía no has enlazado teléfonos. Cada nuevo dispositivo necesitará tu autorización.":"Toca un dispositivo para retirar el permiso de reconexión automática.")
-            .setItems(options,(a,i)->{
-                final String id=ids.get(i);new AlertDialog.Builder(this).setTitle("Revocar autorización")
-                    .setMessage("¿Quitar la confianza automática para "+store.peerName(id)+"? La próxima conexión necesitará tu autorización.")
-                    .setPositiveButton("Revocar",(d,x)->{store.revoke(id);toast("Autorización revocada");render();})
+        for(int i=0;i<ids.size();i++)options[i]=store.peerName(ids.get(i))+
+            (store.trusted(ids.get(i))?" · autorizado":" · sin autorización");
+        new AlertDialog.Builder(this).setTitle("Dispositivos autorizados")
+            .setMessage(ids.isEmpty()?"Todavía no hay dispositivos enlazados.":
+                "Elige un contacto para retirar su autorización de reconexión.")
+            .setItems(options,(a,index)->{
+                String id=ids.get(index);
+                new AlertDialog.Builder(this).setTitle("Revocar enlace")
+                    .setMessage("¿Retirar la autorización de "+store.peerName(id)+"?")
+                    .setPositiveButton("Revocar",(d,n)->{store.revoke(id);toast("Autorización retirada");render();})
                     .setNegativeButton("Cancelar",null).show();
             }).setPositiveButton("Cerrar",null).show();
     }
@@ -1037,13 +1157,24 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
             .setView(layout).setPositiveButton("Listo",null).show();
     }
     private void connectivitySettings(){
-        LinearLayout layout=v();pad(layout,22,10,22,10);
-        TextView a=txt("Wi-Fi local (activo)",15,DARK,true);layout.addView(a);gap(layout,6);
-        layout.addView(txt("NODO detecta y enlaza dispositivos conectados al mismo Wi-Fi o hotspot, sin necesidad de internet.",13,MUTED,false));gap(layout,12);
-        Switch auto=new Switch(this);auto.setText("Reconectar usuarios autorizados");auto.setTextColor(DARK);auto.setChecked(store.autoConnect());
-        auto.setOnCheckedChangeListener((b,c)->{store.autoConnect(c);toast(c?"Reconexión automática activada":"Reconexión automática desactivada");});layout.addView(auto);gap(layout,12);
-        layout.addView(txt("Bluetooth, Wi-Fi Direct y datos móviles: previstos para siguientes versiones. No están activos en este prototipo.",13,MUTED,false));
-        new AlertDialog.Builder(this).setTitle("Conectividad NODO").setView(layout).setPositiveButton("Cerrar",null).show();
+        LinearLayout layout=v();pad(layout,21,10,21,10);
+        Switch lan=new Switch(this);lan.setText("Usar Wi-Fi local");lan.setTextColor(DARK);
+        lan.setChecked(true);lan.setEnabled(false);layout.addView(lan);gap(layout,5);
+        layout.addView(txt("Transporte activo de esta versión. Funciona en una red o hotspot compartido, incluso sin internet.",12,MUTED,false));gap(layout,13);
+        Switch bluetooth=new Switch(this);bluetooth.setText("Usar Bluetooth");
+        bluetooth.setTextColor(MUTED);bluetooth.setChecked(false);bluetooth.setEnabled(false);
+        layout.addView(bluetooth);gap(layout,5);
+        layout.addView(txt("En desarrollo · Aún no hay canal Bluetooth funcional.",12,MUTED,false));gap(layout,13);
+        Switch mobile=new Switch(this);mobile.setText("Usar datos móviles (respaldo)");
+        mobile.setTextColor(MUTED);mobile.setChecked(false);mobile.setEnabled(false);
+        layout.addView(mobile);gap(layout,5);
+        layout.addView(txt("En desarrollo · Requiere servidor de señalización y conexión segura.",12,MUTED,false));gap(layout,13);
+        Switch auto=new Switch(this);auto.setText("Reconexión automática con conocidos");
+        auto.setTextColor(DARK);auto.setChecked(store.autoConnect());
+        auto.setOnCheckedChangeListener((b,on)->store.autoConnect(on));layout.addView(auto);gap(layout,14);
+        layout.addView(txt("Wi-Fi Direct (sin router) se añadirá como transporte independiente. NODO nunca indica conexiones inexistentes.",12,MUTED,false));
+        new AlertDialog.Builder(this).setTitle("Conectividad NODO").setView(layout)
+            .setPositiveButton("Guardar",null).show();
     }
     private void chatSettings(){
         List<String> ids=store.contacts();String[] opts={"Exportar una conversación como texto","Borrar mensajes de un contacto"};
@@ -1085,7 +1216,19 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     private void featurePending(String what){info(what,"Esta función es parte del diseño de NODO, pero aún no está implementada en la versión alfa. El botón no inicia una conexión simulada.");}
     @Override protected void onActivityResult(int req,int res,Intent data){
         super.onActivityResult(req,res,data);
-        if(res!=RESULT_OK||data==null||data.getData()==null)return;
+        if(res!=RESULT_OK||data==null)return;
+        if(req==REQUEST_CAMERA){
+            Bitmap photo=data.getParcelableExtra("data");
+            if(photo==null){toast("La cámara no devolvió ninguna imagen");return;}
+            try{
+                File dir=new File(getFilesDir(),"sent");dir.mkdirs();
+                File file=new File(dir,"foto_"+UUID.randomUUID()+".jpg");
+                try(FileOutputStream out=new FileOutputStream(file)){photo.compress(Bitmap.CompressFormat.JPEG,88,out);}
+                transmitFile(currentPeer,file,file.getName(),false);
+            }catch(Exception e){toast("No se pudo compartir la foto");}
+            return;
+        }
+        if(data.getData()==null)return;
         if(req==REQUEST_DOC)sendPicked(data.getData());
         else if(req==REQUEST_PHOTO)saveProfilePhoto(data.getData());
     }

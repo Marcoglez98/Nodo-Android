@@ -33,6 +33,37 @@ public final class Store {
     public void callSounds(boolean on){p.edit().putBoolean("call_sounds",on).apply();}
     public String avatar(){return p.getString("avatar","");}
     public void avatar(String a){p.edit().putString("avatar",a).apply();}
+    // UI and chat preferences kept independently of the transport implementation.
+    public boolean favorite(String id){return p.getBoolean("favorite_"+id,false);}
+    public void favorite(String id,boolean enabled){p.edit().putBoolean("favorite_"+id,enabled).apply();}
+    public boolean discoverable(){return p.getBoolean("discoverable",true);}
+    public void discoverable(boolean enabled){p.edit().putBoolean("discoverable",enabled).apply();}
+    public boolean allowNewPairing(){return p.getBoolean("allow_new_pairing",true);}
+    public void allowNewPairing(boolean enabled){p.edit().putBoolean("allow_new_pairing",enabled).apply();}
+    public boolean shareLastSeen(){return p.getBoolean("share_last_seen",false);}
+    public void shareLastSeen(boolean enabled){p.edit().putBoolean("share_last_seen",enabled).apply();}
+    public synchronized void markRead(String peer){
+        JSONArray a=messages(peer);
+        long last=System.currentTimeMillis();
+        for(int i=0;i<a.length();i++){
+            JSONObject row=a.optJSONObject(i);
+            if(row!=null&&!row.optBoolean("out"))last=Math.max(last,row.optLong("when"));
+        }
+        p.edit().putLong("lastread_"+peer,last).apply();
+    }
+    public synchronized int unreadCount(String peer){
+        long last=p.getLong("lastread_"+peer,0L);int unread=0;
+        JSONArray a=messages(peer);
+        for(int i=0;i<a.length();i++){
+            JSONObject row=a.optJSONObject(i);
+            if(row!=null&&!row.optBoolean("out")&&row.optLong("when")>last)unread++;
+        }
+        return unread;
+    }
+    public void peerLastSeen(String id,long time){
+        if(id!=null&&!id.isEmpty()&&time>0)p.edit().putLong("remote_seen_"+id,time).apply();
+    }
+    public long peerLastSeen(String id){return p.getLong("remote_seen_"+id,0L);}
     public boolean trusted(String id){return p.getBoolean("trust_"+id,false);}
     public void trust(String id,String name){
         if(id==null||id.isEmpty()) return;

@@ -50,6 +50,8 @@ public final class LocalNode {
     private final Map<String,Connection> sockets=new ConcurrentHashMap<>();
     private final Set<String> connecting=ConcurrentHashMap.newKeySet();
     private volatile boolean running=false;
+    private volatile boolean advertising=false;
+    private NsdServiceInfo announcement;
     private ServerSocket server;
     private NsdManager nsd;
     private NsdManager.RegistrationListener registrar;
@@ -89,13 +91,14 @@ public final class LocalNode {
             pool.execute(()->{while(running){try{Socket s=server.accept();pool.execute(()->handleSocket(s,false));}catch(IOException ex){if(running)listener.status("Red local: "+ex.getMessage());}}});
             NsdServiceInfo info=new NsdServiceInfo();
             info.setServiceName("NODO-"+store.id().substring(0,8));info.setServiceType(SERVICE);info.setPort(server.getLocalPort());
+            announcement=info;
             registrar=new NsdManager.RegistrationListener(){
                 @Override public void onServiceRegistered(NsdServiceInfo s){listener.status("Visible en la red Wi-Fi local");}
                 @Override public void onRegistrationFailed(NsdServiceInfo s,int error){listener.status("No se pudo anunciar NODO: "+error);}
                 @Override public void onServiceUnregistered(NsdServiceInfo s){}
                 @Override public void onUnregistrationFailed(NsdServiceInfo s,int error){}
             };
-            nsd.registerService(info,NsdManager.PROTOCOL_DNS_SD,registrar);
+            if(store.discoverable())setDiscoverable(true);
             discoverer=new NsdManager.DiscoveryListener(){
                 @Override public void onDiscoveryStarted(String t){listener.status("Buscando teléfonos NODO en Wi-Fi local…");}
                 @Override public void onServiceFound(NsdServiceInfo s){
@@ -140,6 +143,18 @@ public final class LocalNode {
             },5,5,TimeUnit.SECONDS);
         }catch(Exception ex){listener.status("Activa Wi-Fi local: "+ex.getMessage());stop();}
     }
+    /** Toggle mDNS advertisement without destroying active authorized sockets. */
+    public synchronized void setDiscoverable(boolean enabled){
+        store.discoverable(enabled);
+        if(!running||nsd==null||registrar==null||announcement==null)return;
+        if(enabled&&!advertising){
+            try{nsd.registerService(announcement,NsdManager.PROTOCOL_DNS_SD,registrar);advertising=true;}
+            catch(Exception e){listener.status("No se pudo anunciar NODO: "+e.getMessage());}
+        }else if(!enabled&&advertising){
+            try{nsd.unregisterService(registrar);}catch(Exception ignored){}
+            advertising=false;
+        }
+    }
     public void connect(Discovered d){
         if(d==null||!running||!connecting.add(d.serviceName))return;
         pool.execute(()->{
@@ -158,7 +173,7 @@ public final class LocalNode {
             s.setTcpNoDelay(true);
             DataInputStream in=new DataInputStream(new BufferedInputStream(s.getInputStream()));
             DataOutputStream out=new DataOutputStream(new BufferedOutputStream(s.getOutputStream()));
-            JSONObject hello=new JSONObject(); hello.put("type","hello");hello.put("id",store.id());hello.put("name",store.name());hello.put("avatar",avatarBase64());hello.put("proto",2);
+            JSONObject hello=new JSONObject(); hello.put("type","hello");hello.put("id",store.id());hello.put("name",store.name());hello.put("avatar",avatarBase64());hello.put("proto",2);hello.put("lastSeen",store.shareLastSeen()?System.currentTimeMillis():0L);
             if(outgoing)write(out,hello,null);
             JSONObject other=read(in);
             if(!"hello".equals(other.optString("type")))throw new IOException("Saludo no válido");
@@ -166,7 +181,10 @@ public final class LocalNode {
             int remoteProto=other.optInt("proto",1);
             if(!remoteId.matches("[a-fA-F0-9]{32}") || remoteId.equals(store.id()))throw new IOException("Identidad no válida");
             saveAvatar(remoteId,other.optString("avatar",""));
+            store.peerLastSeen(remoteId,other.optLong("lastSeen",0L));
             if(!outgoing)write(out,hello,null);
+            if(!outgoing&&!store.trusted(remoteId)&&!store.allowNewPairing())
+                throw new IOException("El usuario no acepta nuevas solicitudes de enlace");
             boolean accepted=outgoing || store.trusted(remoteId);
             if(!accepted){
                 CountDownLatch latch=new CountDownLatch(1);final boolean[] ans={false};
@@ -439,7 +457,8 @@ public final class LocalNode {
     public synchronized void stop(){
         if(!running)return;running=false;endCall();
         if(nsd!=null){try{if(discoverer!=null)nsd.stopServiceDiscovery(discoverer);}catch(Exception ignored){}
-            try{if(registrar!=null)nsd.unregisterService(registrar);}catch(Exception ignored){}}
+            try{if(advertising&&registrar!=null)nsd.unregisterService(registrar);}catch(Exception ignored){}
+            advertising=false;}
         for(Connection cn:sockets.values())try{cn.socket.close();}catch(Exception ignored){}
         sockets.clear();nearby.clear();
         try{if(server!=null)server.close();}catch(IOException ignored){}
