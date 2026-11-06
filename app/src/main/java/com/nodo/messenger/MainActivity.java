@@ -10,6 +10,12 @@ import android.graphics.*;
 import android.graphics.drawable.GradientDrawable;
 import android.media.MediaPlayer;
 import android.media.MediaRecorder;
+import android.media.MediaMetadataRetriever;
+import android.media.PlaybackParams;
+import android.text.InputType;
+import android.graphics.Typeface;
+import android.graphics.drawable.RippleDrawable;
+import android.content.res.ColorStateList;
 import android.net.Uri;
 import android.provider.OpenableColumns;
 import android.view.*;
@@ -42,7 +48,15 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
             renderDisconnected();
         }
     };
-    private LinearLayout root;private ScrollView chatScroll;private EditText composer;
+    private LinearLayout root,chatList;private ScrollView chatScroll;private EditText composer;
+    private TextView chatStatus;
+    private int chatCount=0;
+    private String audioPath="";
+    private SeekBar audioSeek;
+    private TextView audioToggle,audioTime;
+    private Runnable audioTick;
+    private float playbackSpeed=1.0f;
+    private static final String[] STICKERS={"hola","genial","wow","gracias","jaja","bien","ok","amor"};
     private final Handler handler=new Handler(Looper.getMainLooper());
     private String screen="discover",currentPeer="",callPeer="",networkStatus="Iniciando red local…",micAction="";
     private boolean recording=false,muted=false,loud=false,foreground=false,callDialogOpen=false;
@@ -64,6 +78,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
                 Toast.makeText(this,"No se pudo activar segundo plano: "+ex.getMessage(),Toast.LENGTH_LONG).show();
             }
         }
+        bindRequested=bindService(new Intent(this,NodoService.class),connection,Context.BIND_AUTO_CREATE);
         if(store.name().equals("Usuario NODO")) handler.postDelayed(this::intro,600);
         handler.postDelayed(()->{if(!isFinishing())NodeAlerts.requestPermission(this);},2100);
         // Notification intents are handled after the service binder is connected.
@@ -73,17 +88,6 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         TextView title=txt("NODO",28,DARK,true);box.addView(title);
         TextView label=txt("Preparando la red Wi-Fi local…",15,MUTED,false);box.addView(label);
         setContentView(box);
-    }
-    @Override protected void onStart(){
-        super.onStart();
-        if(!bindRequested)
-            bindRequested=bindService(new Intent(this,NodoService.class),connection,Context.BIND_AUTO_CREATE);
-    }
-    @Override protected void onStop(){
-        if(nodoService!=null)nodoService.detach(this);
-        if(bindRequested){unbindService(connection);bindRequested=false;bound=false;}
-        node=null;nodoService=null;
-        super.onStop();
     }
     @Override protected void onResume(){
         super.onResume();foreground=true;
@@ -117,10 +121,11 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     private void toast(String s){Toast.makeText(this,s,Toast.LENGTH_SHORT).show();}
     private void ui(Runnable r){runOnUiThread(r);}
     @Override public void changed(){ui(()->{
-        String draft=screen.equals("chat")&&composer!=null?composer.getText().toString():"";
-        flushPending();if(!screen.equals("call")){render();
-            if(screen.equals("chat")&&composer!=null&&!draft.isEmpty()){composer.setText(draft);composer.setSelection(draft.length());}
-        }
+        if(node==null)return;
+        flushPending();
+        // Never recreate the EditText while the user is typing: it would lose IME focus.
+        if(screen.equals("chat"))refreshChatMessages();
+        else if(!screen.equals("call"))render();
     });}
     @Override public void status(String s){ui(()->{networkStatus=s;if(screen.equals("discover"))render();});}
     @Override public void pairing(String name,java.util.function.Consumer<Boolean> answer){
@@ -133,7 +138,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     @Override public void incoming(LocalNode.Peer p,String kind,String body,String path,String filename){
         // NodoService always persists received messages, including when no Activity exists.
         ui(()->{
-            if(screen.equals("chat")&&currentPeer.equals(p.id)&&foreground)render();
+            if(screen.equals("chat")&&currentPeer.equals(p.id)&&foreground)refreshChatMessages();
             else {
                 String preview=kind.equals("text")?body:kind.equals("voice")?"🎙 Nota de voz":"📎 "+filename;
                 NodeAlerts.message(this,store,p.id,p.name,preview);
@@ -199,8 +204,9 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     private LinearLayout h(){LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.HORIZONTAL);l.setGravity(Gravity.CENTER_VERTICAL);return l;}
     private TextView txt(String s,int sz,int color,boolean bold){
         TextView t=new TextView(this);t.setText(s);t.setTextSize(sz);t.setTextColor(color);
-        t.setGravity(Gravity.CENTER_VERTICAL);t.setIncludeFontPadding(true);
-        if(bold)t.setTypeface(android.graphics.Typeface.DEFAULT,android.graphics.Typeface.BOLD);
+        t.setGravity(Gravity.CENTER_VERTICAL);t.setIncludeFontPadding(false);
+        t.setFontFeatureSettings("kern");
+        t.setTypeface(Typeface.create(bold?"sans-serif-medium":"sans-serif",Typeface.NORMAL));
         return t;
     }
     private LinearLayout.LayoutParams lp(int w,int h){return new LinearLayout.LayoutParams(w<0?w:dp(w),h<0?h:dp(h));}
@@ -220,7 +226,19 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
             TextView s=txt(subtitle,13,MUTED,false);LinearLayout.LayoutParams p=lp(-1,-2);p.topMargin=dp(5);l.addView(s,p);
         }
     }
-    private LinearLayout card(){LinearLayout l=v();pad(l,15,14,15,14);l.setBackground(border(Color.WHITE,18,Color.rgb(235,242,245)));return l;}
+    private LinearLayout card(){
+        LinearLayout l=v();pad(l,17,16,17,16);
+        l.setBackground(border(Color.WHITE,22,Color.rgb(231,240,242)));
+        l.setElevation(dp(2));return l;
+    }
+    private void ripple(View target,int backgroundColor,int radius){
+        target.setBackground(new RippleDrawable(ColorStateList.valueOf(Color.argb(45,32,202,145)),shape(backgroundColor,radius),null));
+        target.setClickable(true);
+    }
+    private TextView glyph(String symbol,int color,int size){
+        TextView item=txt(symbol,size,color,true);item.setGravity(Gravity.CENTER);
+        return item;
+    }
     private ImageView imageLogo(int width){ImageView iv=new ImageView(this);iv.setImageResource(R.drawable.nodo_logo);
         iv.setScaleType(ImageView.ScaleType.FIT_CENTER);iv.setLayoutParams(lp(width,width));return iv;}
     private ImageView avatar(String id,int size){
@@ -235,23 +253,27 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         BitmapFactory.Options b=new BitmapFactory.Options();b.inSampleSize=scale;return BitmapFactory.decodeFile(file,b);
     }
     private void render(){
-        root=v();root.setBackgroundColor(BG);setContentView(root);
-        // Android 15+ draws behind system bars. Respect actual bar AND keyboard insets
-        // instead of using a fixed top margin that would fail on different devices.
+        root=v();root.setBackgroundColor(BG);root.setFocusableInTouchMode(true);
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        setContentView(root);
+        // Android 15+ edge-to-edge: apply system and IME insets to the content root.
+        // Keeping the composer inside a weighted vertical layout lifts it above the IME.
         if(Build.VERSION.SDK_INT>=30){
             root.setOnApplyWindowInsetsListener((view,insets)->{
                 android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.statusBars()|WindowInsets.Type.navigationBars());
                 android.graphics.Insets keyboard=insets.getInsets(WindowInsets.Type.ime());
                 int top=bars.top+dp(5), bottom=Math.max(bars.bottom,keyboard.bottom);
-                if(view.getPaddingTop()!=top||view.getPaddingBottom()!=bottom)
+                if(view.getPaddingTop()!=top||view.getPaddingBottom()!=bottom){
                     view.setPadding(0,top,0,bottom);
+                    if(screen.equals("chat")&&chatScroll!=null)chatScroll.post(()->chatScroll.fullScroll(View.FOCUS_DOWN));
+                }
                 return insets;
             });
             root.requestApplyInsets();
         }
         if(screen.equals("chat")){showChat();return;}
         if(screen.equals("call")){showCall();return;}
-        LinearLayout header=h();pad(header,16,12,16,8);header.setBackgroundColor(Color.WHITE);
+        LinearLayout header=h();pad(header,18,12,18,9);header.setBackgroundColor(Color.WHITE);header.setElevation(dp(3));
         header.addView(imageLogo(38));TextView brand=txt("NODO",23,DARK,true);header.addView(brand);
         View space=new View(this);header.addView(space,new LinearLayout.LayoutParams(0,1,1));
         TextView mini=txt("●  Red local",11,GREEN,true);header.addView(mini);
@@ -275,7 +297,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
             b.addView(icon);b.addView(label);nav.addView(b,new LinearLayout.LayoutParams(0,dp(53),1));
             b.setOnClickListener(w->{screen=k;render();});
         }
-        root.addView(nav,lp(-1,66));
+        nav.setElevation(dp(5));root.addView(nav,lp(-1,66));
     }
     private void showDiscover(LinearLayout body){
         title(body,"Descubrir","Personas y dispositivos que usan NODO cerca de ti");gap(body,13);
@@ -308,7 +330,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         gap(body,12);body.addView(txt("Reconexión automática con contactos autorizados. Para recibir mensajes al cerrar la pantalla, activa Segundo plano en Ajustes.",12,MUTED,false));
     }
     private void showChats(LinearLayout body){
-        title(body,"Chats","Mensajes, fotos, archivos y notas de voz");gap(body,14);
+        title(body,"Conversaciones","Cerca de ti, incluso sin internet");gap(body,14);
         LinearLayout tabs=h();TextView all=pill("Todos",true), near=pill("Conectados",false), groups=pill("Grupos (próximamente)",false);
         all.setOnClickListener(w->toast("Mostrando todas las conversaciones"));
         near.setOnClickListener(w->showOnlineOnly());
@@ -332,7 +354,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     }
     private void gapHorizontal(LinearLayout l,int width){l.addView(new View(this),lp(width,1));}
     private LinearLayout contactRow(String id){
-        LinearLayout outer=card();LinearLayout row=h();row.addView(avatar(id,48));
+        LinearLayout outer=card();LinearLayout row=h();row.addView(avatar(id,50));
         LinearLayout desc=v();pad(desc,12,0,0,0);desc.addView(txt(store.peerName(id),16,DARK,true));
         JSONArray a=store.messages(id);JSONObject last=a.optJSONObject(a.length()-1);
         String preview=last==null?"Toca para iniciar chat":last.optString("kind").equals("text")?last.optString("body"):last.optString("kind").equals("voice")?"🎙 Nota de voz":"📎 "+last.optString("name");
@@ -363,7 +385,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
                 total++;final String path=m.optString("path"),name=m.optString("name");
                 LinearLayout row=card();row.addView(txt((m.optString("kind").equals("voice")?"🎙  ":"📎  ")+name,14,DARK,true));
                 row.addView(txt("Chat: "+store.peerName(id),12,MUTED,false));
-                row.setOnClickListener(w->openLocal(path));body.addView(row);gap(body,8);
+                row.setOnClickListener(w->openLocal(path,name));body.addView(row);gap(body,8);
             }
         }
         if(total==0){LinearLayout none=card();none.addView(txt("No tienes archivos transferidos todavía.",14,DARK,false));body.addView(none);}
@@ -385,7 +407,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         settingsRow(body,"◐","Apariencia","Estilo original blanco y menta",()->info("Apariencia","NODO utiliza el diseño blanco, verde menta y azul elegido. Temas adicionales vendrán después."));
         settingsRow(body,"?","Ayuda","Cómo conectar dos Android",this::help);
         settingsRow(body,"↗","Invitar amigos","Compartir información sobre NODO",this::shareInvite);
-        gap(body,14);body.addView(txt("NODO v0.3.0 · Prototipo alfa · Solo para pruebas. Los chats de esta versión aún NO tienen cifrado de extremo a extremo.",12,MUTED,false));
+        gap(body,14);body.addView(txt("NODO v0.4.0 · Versión alfa · Comunicaciones sin cifrado de extremo a extremo. Solo para pruebas.",12,MUTED,false));
     }
     private void settingsRow(LinearLayout body,String icon,String name,String sub,Runnable action){
         LinearLayout c=card();LinearLayout row=h();
@@ -396,64 +418,243 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     }
     private void openChat(String id){currentPeer=id;screen="chat";render();}
     private void showChat(){
-        LinearLayout bar=h();pad(bar,9,9,12,9);bar.setBackgroundColor(Color.WHITE);
-        TextView back=txt("‹",32,DARK,true);pad(back,5,0,9,0);back.setOnClickListener(w->{screen="chats";render();});bar.addView(back);
-        bar.addView(avatar(currentPeer,42));
-        LinearLayout who=v();pad(who,9,0,4,0);who.addView(txt(store.peerName(currentPeer),17,DARK,true));
-        who.addView(txt(node.isConnected(currentPeer)?"● Conectado por Wi-Fi local":"○ Sin conexión — textos en espera",11,node.isConnected(currentPeer)?GREEN:MUTED,false));
+        LinearLayout bar=h();pad(bar,10,10,14,10);bar.setBackgroundColor(Color.WHITE);bar.setElevation(dp(4));
+        TextView back=glyph("‹",DARK,32);pad(back,4,0,10,0);back.setOnClickListener(w->{screen="chats";render();});bar.addView(back);
+        bar.addView(avatar(currentPeer,44));
+        LinearLayout who=v();pad(who,10,0,2,0);who.addView(txt(store.peerName(currentPeer),17,DARK,true));
+        chatStatus=txt("",11,MUTED,false);who.addView(chatStatus);
         bar.addView(who,new LinearLayout.LayoutParams(0,-2,1));
-        TextView call=txt("☎",25,GREEN,true);pad(call,6,2,6,2);call.setOnClickListener(w->call(currentPeer));bar.addView(call);
-        TextView video=txt("▣",23,GREEN,true);pad(video,5,2,5,2);video.setOnClickListener(w->featurePending("Videollamadas"));bar.addView(video);
-        root.addView(bar,lp(-1,68));
-        TextView tag=txt(node.isConnected(currentPeer)?"◉  Conectado sin internet · Red Wi-Fi local":"○  Se enviarán los textos al volver a conectar",12,node.isConnected(currentPeer)?Color.rgb(8,122,78):MUTED,true);
-        tag.setGravity(Gravity.CENTER);tag.setBackground(shape(node.isConnected(currentPeer)?PALE:Color.rgb(236,241,244),12));pad(tag,7,10,7,10);
-        LinearLayout.LayoutParams tp=lp(-1,-2);tp.setMargins(dp(13),dp(5),dp(13),dp(6));root.addView(tag,tp);
-        chatScroll=new ScrollView(this);chatScroll.setFillViewport(true);
-        LinearLayout list=v();pad(list,12,8,12,12);chatScroll.addView(list);
+        TextView call=glyph("☎",GREEN,24);pad(call,7,5,7,5);call.setOnClickListener(w->call(currentPeer));bar.addView(call);
+        TextView video=glyph("▣",GREEN,23);pad(video,7,5,3,5);video.setOnClickListener(w->featurePending("Videollamadas"));bar.addView(video);
+        root.addView(bar,lp(-1,70));
+        TextView tag=txt("◈  Comunicación mediante Wi-Fi local",11,Color.rgb(7,121,87),true);
+        tag.setGravity(Gravity.CENTER);tag.setBackground(shape(PALE,14));pad(tag,10,9,10,9);
+        LinearLayout.LayoutParams tp=lp(-1,-2);tp.setMargins(dp(16),dp(10),dp(16),dp(7));root.addView(tag,tp);
+        chatScroll=new ScrollView(this);chatScroll.setFillViewport(true);chatScroll.setClipToPadding(false);
+        chatScroll.setVerticalScrollBarEnabled(false);chatScroll.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
+        chatList=v();pad(chatList,14,12,14,16);chatScroll.addView(chatList);
         root.addView(chatScroll,new LinearLayout.LayoutParams(-1,0,1));
-        JSONArray items=store.messages(currentPeer);
-        if(items.length()==0){TextView empty=txt("¡Saluda! 👋\nAquí aparecerán tus conversaciones.",15,MUTED,false);empty.setGravity(Gravity.CENTER);pad(empty,10,55,10,10);list.addView(empty);}
-        for(int i=0;i<items.length();i++){
-            JSONObject msg=items.optJSONObject(i);if(msg!=null)addBubble(list,msg);
+        refreshChatMessages();
+        if(recording){
+            TextView live=txt("●  Grabando audio · Toca detener para enviarlo",12,Color.rgb(184,52,69),true);
+            live.setBackground(shape(Color.rgb(255,238,241),13));pad(live,18,10,14,10);
+            root.addView(live);
         }
-        if(recording){TextView live=txt("● Grabando nota de voz… Toca el micrófono para enviar.",13,Color.rgb(193,55,55),true);pad(live,16,6,12,6);root.addView(live);}
-        LinearLayout input=h();pad(input,8,8,8,10);input.setBackgroundColor(Color.WHITE);
-        TextView plus=pill("＋",false);plus.setOnClickListener(w->pickFile());input.addView(plus);
-        composer=new EditText(this);composer.setSingleLine(false);composer.setMaxLines(3);
-        composer.setTextSize(15);composer.setTextColor(DARK);composer.setHint("Escribe un mensaje…");
-        composer.setBackground(shape(Color.rgb(241,246,248),23));pad(composer,12,7,12,7);
-        LinearLayout.LayoutParams ep=new LinearLayout.LayoutParams(0,-2,1);ep.setMargins(dp(6),0,dp(6),0);input.addView(composer,ep);
-        TextView send=txt("➤",22,GREEN,true);send.setGravity(Gravity.CENTER);pad(send,5,5,5,5);send.setOnClickListener(w->sendText());input.addView(send);
-        TextView mic=txt(recording?"■":"🎙",22,recording?Color.RED:GREEN,true);mic.setGravity(Gravity.CENTER);pad(mic,6,5,6,5);
-        mic.setOnClickListener(w->toggleRecorder());input.addView(mic);
+        LinearLayout input=h();pad(input,11,9,11,9);input.setBackgroundColor(Color.WHITE);input.setElevation(dp(6));
+        TextView attach=glyph("+",GREEN,27);ripple(attach,PALE,28);input.addView(attach,lp(39,40));
+        attach.setOnClickListener(w->showAttachments());
+        composer=new EditText(this);composer.setSingleLine(false);composer.setMaxLines(5);
+        composer.setMinHeight(dp(43));composer.setTextSize(15);composer.setTextColor(DARK);
+        composer.setHintTextColor(MUTED);composer.setHint("Mensaje…");
+        composer.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE|InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        composer.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);
+        composer.setBackground(border(Color.rgb(245,249,250),23,Color.rgb(225,237,237)));
+        pad(composer,14,7,10,7);
+        LinearLayout.LayoutParams ep=new LinearLayout.LayoutParams(0,-2,1);ep.setMargins(dp(8),0,dp(5),0);input.addView(composer,ep);
+        composer.setOnFocusChangeListener((view,focus)->{if(focus&&chatScroll!=null)chatScroll.postDelayed(()->chatScroll.fullScroll(View.FOCUS_DOWN),120);});
+        TextView emoji=glyph("☺",Color.rgb(44,154,130),23);pad(emoji,3,5,3,5);emoji.setOnClickListener(w->showExpressionPicker(false));input.addView(emoji);
+        TextView send=glyph("➤",Color.WHITE,20);send.setBackground(gradient());input.addView(send,lp(40,42));send.setOnClickListener(w->sendText());
+        TextView mic=glyph(recording?"■":"🎙",recording?Color.rgb(206,58,74):GREEN,22);
+        pad(mic,5,6,1,6);mic.setOnClickListener(w->toggleRecorder());input.addView(mic);
         root.addView(input,lp(-1,-2));
+        // Focus is requested only by user interaction, not when opening a conversation.
+        root.requestFocus();
+        chatScroll.post(()->chatScroll.fullScroll(View.FOCUS_DOWN));
+    }
+    private void refreshChatMessages(){
+        if(chatList==null||node==null||!screen.equals("chat"))return;
+        boolean connected=node.isConnected(currentPeer);
+        if(chatStatus!=null){chatStatus.setText(connected?"●  Conectado por Wi-Fi local":"○  Sin conexión · textos en espera");chatStatus.setTextColor(connected?GREEN:MUTED);}
+        JSONArray items=store.messages(currentPeer);
+        if(items.length()==chatCount && chatList.getChildCount()>0)return;
+        chatList.removeAllViews();chatCount=items.length();
+        if(items.length()==0){
+            LinearLayout welcome=card();welcome.setGravity(Gravity.CENTER);gap(welcome,14);
+            TextView a=txt("🌿",36,GREEN,true);a.setGravity(Gravity.CENTER);welcome.addView(a);
+            TextView t=txt("¡Empieza la conversación!",17,DARK,true);t.setGravity(Gravity.CENTER);welcome.addView(t);
+            TextView desc=txt("Escribe, comparte fotos o envía una nota de voz.",13,MUTED,false);desc.setGravity(Gravity.CENTER);welcome.addView(desc);
+            chatList.addView(welcome);return;
+        }
+        for(int i=0;i<items.length();i++){
+            JSONObject msg=items.optJSONObject(i);if(msg!=null)addBubble(chatList,msg);
+        }
         chatScroll.post(()->chatScroll.fullScroll(View.FOCUS_DOWN));
     }
     private void addBubble(LinearLayout list,JSONObject msg){
         boolean out=msg.optBoolean("out");String kind=msg.optString("kind"),body=msg.optString("body"),path=msg.optString("path"),name=msg.optString("name");
-        LinearLayout container=v();pad(container,11,9,11,8);container.setBackground(shape(out?PALE:Color.WHITE,17));
-        if(kind.equals("text"))container.addView(txt(body,15,DARK,false));
-        else if(kind.equals("voice")){
-            TextView a=txt("▶  ▰▱▰▱▰▱▰▱  Nota de voz",14,GREEN,true);pad(a,5,5,5,5);a.setOnClickListener(w->playNote(path));container.addView(a);
-        }else if(kind.equals("file")){
-            if(isImage(name)&&new File(path).isFile()){
-                ImageView preview=new ImageView(this);preview.setImageBitmap(decode(path,220));preview.setScaleType(ImageView.ScaleType.CENTER_CROP);
-                container.addView(preview,lp(230,145));
-            }
-            TextView f=txt("📎 "+name,14,DARK,true);pad(f,2,8,2,4);f.setOnClickListener(w->openLocal(path));container.addView(f);
+        boolean sticker=kind.equals("file")&&isSticker(name);
+        LinearLayout container=v();pad(container,sticker?2:13,sticker?2:12,sticker?2:13,sticker?2:9);
+        if(!sticker){
+            container.setBackground(border(out?Color.rgb(218,248,237):Color.WHITE,20,out?Color.rgb(193,236,219):Color.rgb(229,237,241)));
+            container.setElevation(dp(1));
         }
-        String state=out?(msg.optBoolean("sent")?"  ✓ enviado":"  ◷ pendiente"):"";
+        if(kind.equals("text")){
+            TextView t=txt(body,15,DARK,false);t.setMaxWidth(dp(284));t.setLineSpacing(dp(3),1.03f);
+            container.addView(t);
+        }else if(kind.equals("voice")){
+            addAudioBubble(container,path,out);
+        }else if(kind.equals("file")){
+            File file=new File(path);
+            if(sticker && file.isFile()){
+                ImageView stickerImage=new ImageView(this);stickerImage.setImageBitmap(decode(path,300));
+                stickerImage.setScaleType(ImageView.ScaleType.FIT_CENTER);container.addView(stickerImage,lp(164,164));
+                stickerImage.setOnClickListener(w->openLocal(path,name));
+            }else{
+                if(isImage(name)&&file.isFile()){
+                    ImageView preview=new ImageView(this);preview.setImageBitmap(decode(path,550));
+                    preview.setScaleType(ImageView.ScaleType.CENTER_CROP);preview.setBackground(shape(PALE,12));preview.setClipToOutline(true);
+                    container.addView(preview,lp(225,155));preview.setOnClickListener(w->openLocal(path,name));gap(container,7);
+                }
+                String icon=isPdf(name)?"▤":isVideo(name)?"▶":isAudio(name)?"♫":"▣";
+                LinearLayout link=h();TextView document=glyph(icon,GREEN,24);
+                link.addView(document,lp(34,38));
+                LinearLayout desc=v();pad(desc,7,0,0,0);
+                TextView fname=txt(name,13,DARK,true);fname.setMaxWidth(dp(200));fname.setMaxLines(2);desc.addView(fname);
+                desc.addView(txt("Ver en NODO · "+humanSize(file.length()),11,MUTED,false));link.addView(desc);
+                container.addView(link);link.setOnClickListener(w->openLocal(path,name));
+            }
+        }
+        String state=out?(msg.optBoolean("sent")?"  ✓✓":"  ◷") : "";
         TextView time=txt(clock.format(new Date(msg.optLong("when",System.currentTimeMillis())))+state,10,MUTED,false);
-        time.setGravity(Gravity.RIGHT);container.addView(time);
-        LinearLayout frame=h();frame.setGravity(out?Gravity.RIGHT:Gravity.LEFT);frame.addView(container);
-        LinearLayout.LayoutParams mar=lp(-1,-2);mar.bottomMargin=dp(8);list.addView(frame,mar);
+        time.setGravity(Gravity.RIGHT);pad(time,0,6,0,0);container.addView(time);
+        LinearLayout frame=h();frame.setGravity(out?Gravity.RIGHT:Gravity.LEFT);
+        frame.addView(container,new LinearLayout.LayoutParams(-2,-2));
+        LinearLayout.LayoutParams mar=lp(-1,-2);mar.bottomMargin=dp(10);list.addView(frame,mar);
+    }
+    private boolean isSticker(String filename){return filename!=null&&filename.startsWith("nodo_sticker_")&&filename.endsWith(".png");}
+    private boolean isPdf(String name){return name.toLowerCase(Locale.ROOT).endsWith(".pdf");}
+    private boolean isVideo(String name){return name.toLowerCase(Locale.ROOT).matches(".*\\.(mp4|webm|3gp|mkv)$");}
+    private boolean isAudio(String name){return name.toLowerCase(Locale.ROOT).matches(".*\\.(m4a|mp3|wav|aac|ogg)$");}
+    private String humanSize(long bytes){return bytes>=1048576?String.format(Locale.getDefault(),"%.1f MB",bytes/1048576.0):Math.max(1,bytes/1024)+" KB";}
+    private void addAudioBubble(LinearLayout parent,String path,boolean out){
+        LinearLayout row=h();
+        TextView play=glyph("▶",Color.WHITE,20);play.setBackground(shape(out?GREEN:BLUE,23));row.addView(play,lp(45,45));
+        LinearLayout details=v();pad(details,10,0,0,0);
+        details.addView(txt("Nota de voz",12,DARK,true));
+        LinearLayout progress=h();
+        SeekBar seek=new SeekBar(this);seek.setMax(1000);seek.setProgressTintList(ColorStateList.valueOf(out?GREEN:BLUE));
+        progress.addView(seek,new LinearLayout.LayoutParams(0,dp(32),1));
+        TextView duration=txt(voiceDuration(path),11,MUTED,false);progress.addView(duration);
+        details.addView(progress);row.addView(details,new LinearLayout.LayoutParams(0,-2,1));
+        parent.addView(row,lp(247,-2));
+        play.setOnClickListener(w->toggleVoicePlayback(path,play,seek,duration));
+        seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+            @Override public void onStartTrackingTouch(SeekBar b){}
+            @Override public void onStopTrackingTouch(SeekBar b){if(player!=null&&path.equals(audioPath)&&player.getDuration()>0)player.seekTo(player.getDuration()*b.getProgress()/1000);}
+            @Override public void onProgressChanged(SeekBar b,int p,boolean from){ }
+        });
+    }
+    private String voiceDuration(String path){
+        MediaMetadataRetriever mm=new MediaMetadataRetriever();
+        try{mm.setDataSource(path);String s=mm.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+            if(s!=null){int secs=(int)(Long.parseLong(s)/1000);return String.format(Locale.getDefault(),"%d:%02d",secs/60,secs%60);}}
+        catch(Exception ignored){}finally{try{mm.release();}catch(Exception ignored){}}
+        return "0:00";
+    }
+    private void toggleVoicePlayback(String path,TextView button,SeekBar seek,TextView duration){
+        if(path.isEmpty()||!new File(path).isFile()){toast("No se encuentra la nota de voz");return;}
+        try{
+            if(player!=null && path.equals(audioPath)){
+                if(player.isPlaying()){player.pause();button.setText("▶");return;}
+                player.start();button.setText("Ⅱ");startAudioProgress(button,seek,duration);return;
+            }
+            stopVoicePlayback();
+            player=new MediaPlayer();player.setDataSource(path);player.prepare();player.start();audioPath=path;button.setText("Ⅱ");
+            player.setOnCompletionListener(mp->{stopVoicePlayback();button.setText("▶");seek.setProgress(0);});
+            startAudioProgress(button,seek,duration);
+        }catch(Exception ex){stopVoicePlayback();toast("No se pudo reproducir el audio");}
+    }
+    private void startAudioProgress(TextView button,SeekBar seek,TextView duration){
+        if(audioTick!=null)handler.removeCallbacks(audioTick);
+        audioTick=new Runnable(){@Override public void run(){
+            try{if(player==null||!player.isPlaying())return;
+                int length=player.getDuration(),position=player.getCurrentPosition();
+                if(length>0)seek.setProgress(position*1000/length);
+                int secs=position/1000;duration.setText(String.format(Locale.getDefault(),"%d:%02d",secs/60,secs%60));
+                handler.postDelayed(this,180);
+            }catch(Exception ignored){}
+        }};handler.post(audioTick);
+    }
+    private void stopVoicePlayback(){
+        if(audioTick!=null){handler.removeCallbacks(audioTick);audioTick=null;}
+        if(player!=null){try{player.stop();}catch(Exception ignored){}try{player.release();}catch(Exception ignored){}player=null;}
+        audioPath="";
+    }
+    private void showAttachments(){
+        final String[] choices={"📷  Foto o imagen","📎  Documento o archivo","☺  Emojis","▧  Stickers"};
+        new AlertDialog.Builder(this).setTitle("Compartir en NODO")
+            .setItems(choices,(d,which)->{if(which<2)pickFile();else showExpressionPicker(which==3);}).show();
+    }
+    private void showExpressionPicker(boolean startStickers){
+        LinearLayout sheet=v();pad(sheet,14,12,14,8);sheet.setBackgroundColor(Color.WHITE);
+        LinearLayout tabs=h();TextView emojis=pill("☺ Emojis",!startStickers),stickers=pill("▧ Stickers",startStickers);
+        tabs.addView(emojis);gapHorizontal(tabs,8);tabs.addView(stickers);sheet.addView(tabs);gap(sheet,10);
+        ScrollView scroll=new ScrollView(this);LinearLayout panel=v();scroll.addView(panel);sheet.addView(scroll,lp(-1,360));
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Exprésate en NODO")
+            .setView(sheet).setNegativeButton("Cerrar",null).create();
+        Runnable emojiTab=()->fillEmojis(panel,dialog);
+        Runnable stickerTab=()->fillStickers(panel,dialog);
+        emojis.setOnClickListener(w->emojiTab.run());stickers.setOnClickListener(w->stickerTab.run());
+        if(startStickers)stickerTab.run();else emojiTab.run();dialog.show();
+    }
+    private void fillEmojis(LinearLayout panel,AlertDialog dialog){
+        panel.removeAllViews();
+        String[][] sections={
+            {"Caritas","😀","😃","😄","😁","😆","😂","🤣","😊","😍","🥰","😘","😎","😢","😭","😡","🥹","🤩","🙃","😴","😉"},
+            {"Gestos","👍","👎","👏","🙌","👌","✌️","🤝","🙏","💪","👋","🤗","🤞","👀","💯","🔥","✨"},
+            {"Corazones y naturaleza","❤️","💚","💙","💜","💛","🩷","💕","💖","💘","🌹","🌸","🌿","🌞","🌈","🌙","⭐"},
+            {"Fiesta y objetos","🎉","🎂","🎁","🎵","🎧","☕","🍕","⚽","🚀","📷","📍","🎈","💡","✅","❗","🥳"}
+        };
+        for(String[] section:sections){
+            TextView heading=txt(section[0],14,DARK,true);pad(heading,5,11,3,9);panel.addView(heading);
+            GridLayout grid=new GridLayout(this);grid.setColumnCount(5);
+            for(int i=1;i<section.length;i++){
+                final String emoji=section[i];TextView icon=glyph(emoji,DARK,25);
+                GridLayout.LayoutParams cell=new GridLayout.LayoutParams();cell.width=dp(57);cell.height=dp(53);
+                cell.setMargins(dp(2),dp(2),dp(2),dp(2));grid.addView(icon,cell);
+                ripple(icon,Color.rgb(247,251,252),13);
+                icon.setOnClickListener(w->{if(composer!=null){int at=Math.max(0,composer.getSelectionStart());composer.getText().insert(at,emoji);composer.requestFocus();}dialog.dismiss();});
+            }
+            panel.addView(grid);
+        }
+    }
+    private void fillStickers(LinearLayout panel,AlertDialog dialog){
+        panel.removeAllViews();
+        TextView hint=txt("Stickers incluidos en NODO · Se envían como imágenes a tus contactos.",13,MUTED,false);
+        pad(hint,4,7,2,10);panel.addView(hint);
+        GridLayout grid=new GridLayout(this);grid.setColumnCount(2);
+        for(String id:STICKERS){
+            ImageView image=new ImageView(this);image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            try(InputStream in=getAssets().open("stickers/"+id+".png")){image.setImageBitmap(BitmapFactory.decodeStream(in));}
+            catch(IOException ignored){}
+            GridLayout.LayoutParams cell=new GridLayout.LayoutParams();cell.width=dp(142);cell.height=dp(132);
+            cell.setMargins(dp(4),dp(4),dp(4),dp(4));grid.addView(image,cell);
+            ripple(image,Color.rgb(248,252,250),19);
+            image.setOnClickListener(w->{dialog.dismiss();sendSticker(id);});
+        }
+        panel.addView(grid);
+    }
+    private void sendSticker(String sticker){
+        if(node==null||!node.isConnected(currentPeer)){toast("Conecta con tu contacto para enviar stickers");return;}
+        final String peer=currentPeer;
+        new Thread(()->{
+            try{
+                File folder=new File(getFilesDir(),"sent");folder.mkdirs();
+                File file=new File(folder,UUID.randomUUID()+"_nodo_sticker_"+sticker+".png");
+                try(InputStream in=getAssets().open("stickers/"+sticker+".png");OutputStream out=new FileOutputStream(file)){
+                    byte[] block=new byte[8192];int n;while((n=in.read(block))!=-1)out.write(block,0,n);
+                }
+                transmitFile(peer,file,"nodo_sticker_"+sticker+".png",false);
+            }catch(Exception ex){ui(()->toast("No se pudo enviar el sticker"));}
+        },"nodo-sticker").start();
     }
     private boolean isImage(String name){String s=name.toLowerCase(Locale.ROOT);return s.endsWith(".jpg")||s.endsWith(".jpeg")||s.endsWith(".png")||s.endsWith(".webp")||s.endsWith(".gif");}
     private void sendText(){
         String text=composer.getText().toString().trim();if(text.isEmpty())return;
         boolean sent=node.send(currentPeer,"text",text);
         store.saveMessage(currentPeer,store.newMessage(true,"text",text,"","",sent));
-        render();if(!sent)toast("Mensaje guardado; se enviará cuando vuelvan a conectarse");
+        composer.setText("");refreshChatMessages();
+        if(!sent)toast("Mensaje guardado; se enviará cuando vuelvan a conectarse");
     }
     private void pickFile(){
         if(!node.isConnected(currentPeer)){toast("Conecta primero con tu contacto para enviar archivos");return;}
@@ -486,7 +687,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     private void transmitFile(String peer,File file,String name,boolean voice){
         node.sendFile(peer,file,name,voice,ok->ui(()->{
             if(ok){store.saveMessage(peer,store.newMessage(true,voice?"voice":"file","",file.getAbsolutePath(),name,true));
-                if(screen.equals("chat")&&currentPeer.equals(peer))render();toast("Archivo enviado");
+                if(screen.equals("chat")&&currentPeer.equals(peer))refreshChatMessages();toast("Archivo enviado");
             }else toast("No enviado. Comprueba el enlace e inténtalo de nuevo.");
         }));
     }
@@ -539,9 +740,9 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     private void playNote(String path){
         if(path.isEmpty()||!new File(path).isFile()){toast("Audio no disponible");return;}
         try{
-            if(player!=null){player.stop();player.release();player=null;}
-            player=new MediaPlayer();player.setDataSource(path);player.prepare();player.start();
-            player.setOnCompletionListener(m->{m.release();if(player==m)player=null;});
+            stopVoicePlayback();
+            player=new MediaPlayer();player.setDataSource(path);player.prepare();player.start();audioPath=path;
+            player.setOnCompletionListener(m->{stopVoicePlayback();});
             toast("Reproduciendo nota de voz");
         }catch(Exception ex){toast("No se puede reproducir este audio");}
     }
@@ -575,17 +776,10 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         LinearLayout.LayoutParams e=lp(-1,54);e.setMargins(dp(30),dp(6),dp(30),dp(30));root.addView(end,e);
         end.setOnClickListener(w->{node.endCall();if(nodoService!=null)nodoService.captureMicrophone(false);screen="chats";render();});
     }
-    private void openLocal(String path){
+    private void openLocal(String path){openLocal(path,new File(path).getName());}
+    private void openLocal(String path,String name){
         File file=new File(path);if(!file.isFile()){toast("No se encontró el archivo");return;}
-        String folder=file.getParentFile().getName();
-        Uri uri=NodeFileProvider.uri(folder,file.getName());
-        Intent view=new Intent(Intent.ACTION_VIEW);view.setDataAndType(uri,getContentResolver().getType(uri));
-        view.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        try{startActivity(view);}catch(Exception e){
-            Intent share=new Intent(Intent.ACTION_SEND);share.setType(getContentResolver().getType(uri));
-            share.putExtra(Intent.EXTRA_STREAM,uri);share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(Intent.createChooser(share,"Compartir archivo NODO"));
-        }
+        NodeViewer.open(this,file,name);
     }
     private void editProfile(){
         LinearLayout form=v();pad(form,22,10,22,5);
@@ -741,6 +935,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         else super.onBackPressed();
     }
     @Override protected void onDestroy(){
+        stopVoicePlayback();
         if(recording)stopRecorder(false);
         if(player!=null){player.release();player=null;}
         if(nodoService!=null)nodoService.detach(this);

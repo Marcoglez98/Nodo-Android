@@ -1,3 +1,18 @@
+# NODO Android 0.4.0 alfa — rediseño y visualizador integrado
+
+**Actualización 0.4** (experimental): conserva la mensajería por la misma red Wi-Fi y el servicio en primer plano de 0.3. Cambios principales:
+
+- Chat renovado, tipografía Android sans-serif-medium, burbujas diferenciadas, tarjetas suaves y controles de voz con botón, progreso y duración.
+- Reorganización del campo de escritura: no se reconstruye el `EditText` al enviar ni al llegar un mensaje, preservando el foco del teclado; la ventana utiliza insets para ajustarse por encima del teclado y las barras del sistema.
+- Selector de emojis por categorías con inserción en el campo de texto.
+- Ocho stickers gráficos locales que se transmiten como archivos PNG normales por el enlace Wi-Fi; el receptor puede visualizarlos en la conversación.
+- Visualizador **dentro de NODO**: fotografías con zoom, PDFs con navegación de páginas, videos y audios con reproductores, y textos legibles; DOCX/PPTX/XLSX tienen solo extracción de texto simplificada. Los tipos no admitidos muestran un aviso dentro de NODO y ofrecen exportación opcional.
+- `versionCode 4` y nuevo artefacto de GitHub Actions `NODO-v0.4-alpha-APK`.
+
+**Advertencias**: La compilación debug de GitHub Actions utiliza una clave local distinta en cada runner. Si el APK antiguo tiene firma diferente, Android puede exigir desinstalar la versión anterior. **Haz copia de tus chats antes de desinstalar**. No existe restauración desde copia y no se ha configurado una clave de firma persistente. La aplicación no tiene cifrado de extremo a extremo; úsala solo para pruebas. No funciona todavía la comunicación remota, Wi-Fi Direct, Bluetooth ni las videollamadas. El visor de Office no reproduce estilos, tablas ni imágenes con fidelidad. Algunas variantes de video dependen de los códecs instalados en Android.
+
+---
+
 # NODO para Android — prototipo 0.1.0 alfa
 
 **NODO** es el prototipo inicial de una app de comunicación cercana, con interfaz blanco/verde menta/azul inspirada en el boceto aprobado. Incluye icono y logo propios en la misma familia visual.
