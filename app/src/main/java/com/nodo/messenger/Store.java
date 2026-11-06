@@ -19,6 +19,8 @@ public final class Store {
     public void name(String s){p.edit().putString("name",s).apply();}
     public String status(){return p.getString("status","Disponible en NODO");}
     public void status(String s){p.edit().putString("status",s).apply();}
+    public boolean backgroundEnabled(){return p.getBoolean("background_enabled",true);}
+    public void backgroundEnabled(boolean enable){p.edit().putBoolean("background_enabled",enable).apply();}
     public boolean autoConnect(){return p.getBoolean("autoconnect",true);}
     public void autoConnect(boolean b){p.edit().putBoolean("autoconnect",b).apply();}
     public boolean messageNotifications(){return p.getBoolean("message_notifications",true);}

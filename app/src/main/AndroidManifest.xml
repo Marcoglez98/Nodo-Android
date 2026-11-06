@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
@@ -15,6 +18,7 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true"
         android:theme="@style/NodoTheme">
+        <service android:name=".NodoService" android:exported="false" android:stopWithTask="false" android:foregroundServiceType="connectedDevice|microphone" />
         <provider android:name=".NodeFileProvider" android:authorities="com.nodo.messenger.files" android:exported="false" android:grantUriPermissions="true" />
         <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize" android:launchMode="singleTop">
             <intent-filter>

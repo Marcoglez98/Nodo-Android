@@ -72,3 +72,16 @@
 **v0.4**: grupos y llamadas grupales, manejo de colas y recibos de entrega, exportaciones y firma estable.
 
 El boceto visual entregado por el usuario está en `design/referencia-visual-nodo.png` para guiar futuras iteraciones UI.
+
+
+## NODO 0.3 alfa — servicio en segundo plano
+- `NodoService` (servicio en primer plano Android `connectedDevice`): mantiene el servidor TCP, NSD/mDNS y las conexiones de contactos autorizados independientemente de `MainActivity`.
+- Notificación persistente con estado de red y acción **Detener**. En llamadas iniciadas/contestadas desde la interfaz, se activa además el tipo de servicio `microphone` para continuar el audio cuando la pantalla se apaga.
+- Ajustes > Segundo plano: habilitar/deshabilitar servicio y acceso a los ajustes de batería.
+- La reconexión local funciona con la app en ejecución y con Wi-Fi local o hotspot; no habilita Bluetooth, Wi-Fi Direct ni mensajes por datos móviles.
+- Avisos de mensaje y llamada mientras el servicio sigue vivo. Deslizar la actividad de aplicaciones recientes no debería detenerlo mientras permanezca la notificación; forzar cierre o restricciones del sistema sí pueden detenerlo.
+- Las solicitudes de emparejamiento de desconocidos necesitan confirmación explícita desde la pantalla y caducan.
+
+**Seguridad:** prototipo alfa sin cifrado de extremo a extremo. El usuario debe mantener el control de su red y permisos.
+
+**Firma Android:** el APK generado por GitHub Actions utiliza la firma de depuración del runner y puede no actualizar APKs previos. Para instalaciones actualizables a largo plazo, configurar una llave de firma de publicación persistente mediante secretos de GitHub (no se debe publicar la llave en el repositorio).

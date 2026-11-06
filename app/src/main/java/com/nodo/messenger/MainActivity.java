@@ -26,7 +26,22 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     private static final int GREEN=Color.rgb(32,202,145), DARK=Color.rgb(19,36,51), MUTED=Color.rgb(107,123,134);
     private static final int PALE=Color.rgb(225,252,239), BG=Color.rgb(248,251,253), BLUE=Color.rgb(65,174,231);
     private static final int REQUEST_DOC=41,REQUEST_PHOTO=42,REQUEST_MIC=43;
-    private Store store; private LocalNode node;
+    private Store store; private LocalNode node; private NodoService nodoService;
+    private boolean bound=false,bindRequested=false;
+    private final ServiceConnection connection=new ServiceConnection(){
+        @Override public void onServiceConnected(ComponentName name,IBinder binder){
+            nodoService=((NodoService.LocalBinder)binder).service();
+            node=nodoService.network();bound=true;
+            nodoService.attach(MainActivity.this);
+            render();handleLaunch(getIntent());
+            String caller=nodoService.pendingCaller();
+            if(caller!=null&&!caller.isEmpty()&&node.isCalling())showIncomingCallDialog(caller);
+        }
+        @Override public void onServiceDisconnected(ComponentName name){
+            bound=false;node=null;nodoService=null;
+            renderDisconnected();
+        }
+    };
     private LinearLayout root;private ScrollView chatScroll;private EditText composer;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private String screen="discover",currentPeer="",callPeer="",networkStatus="Iniciando red local…",micAction="";
@@ -42,27 +57,59 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         if (Build.VERSION.SDK_INT >= 30) getWindow().setDecorFitsSystemWindows(false);
         NodeAlerts.setup(this);
-        store=new Store(this);node=new LocalNode(this,store,this);
-        render();node.start();
+        store=new Store(this);
+        renderDisconnected();
+        if(store.backgroundEnabled()){
+            try{NodoService.start(this);}catch(Exception ex){
+                Toast.makeText(this,"No se pudo activar segundo plano: "+ex.getMessage(),Toast.LENGTH_LONG).show();
+            }
+        }
         if(store.name().equals("Usuario NODO")) handler.postDelayed(this::intro,600);
         handler.postDelayed(()->{if(!isFinishing())NodeAlerts.requestPermission(this);},2100);
-        handleLaunch(getIntent());
+        // Notification intents are handled after the service binder is connected.
+    }
+    private void renderDisconnected(){
+        LinearLayout box=v();box.setGravity(Gravity.CENTER);box.setBackgroundColor(BG);
+        TextView title=txt("NODO",28,DARK,true);box.addView(title);
+        TextView label=txt("Preparando la red Wi-Fi local…",15,MUTED,false);box.addView(label);
+        setContentView(box);
+    }
+    @Override protected void onStart(){
+        super.onStart();
+        if(!bindRequested)
+            bindRequested=bindService(new Intent(this,NodoService.class),connection,Context.BIND_AUTO_CREATE);
+    }
+    @Override protected void onStop(){
+        if(nodoService!=null)nodoService.detach(this);
+        if(bindRequested){unbindService(connection);bindRequested=false;bound=false;}
+        node=null;nodoService=null;
+        super.onStop();
     }
     @Override protected void onResume(){
         super.onResume();foreground=true;
-        if(!pendingCaller.isEmpty()&&node!=null&&node.isCalling())
+        if(nodoService!=null){
+            nodoService.attach(this);
+            String pending=nodoService.pendingCaller();
+            if(pending!=null&&!pending.isEmpty()&&node!=null&&node.isCalling())pendingCaller=pending;
+        }
+        if(!pendingCaller.isEmpty()&&node!=null&&node.isCalling()){
             handler.post(()->showIncomingCallDialog(pendingCaller));
+        }
     }
-    @Override protected void onPause(){foreground=false;super.onPause();}
+    @Override protected void onPause(){
+        foreground=false;
+        if(nodoService!=null)nodoService.detach(this);
+        super.onPause();
+    }
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);handleLaunch(intent);}
     private void handleLaunch(Intent intent){
         if(intent==null)return;
         String peer=intent.getStringExtra("nodo_peer");
         if(peer==null||peer.isEmpty())return;
         intent.removeExtra("nodo_peer");
-        if(node!=null && node.isCalling() && peer.equals(pendingCaller)){
+        if(node!=null && nodoService!=null && node.isCalling() && peer.equals(nodoService.pendingCaller())){
             if(foreground)showIncomingCallDialog(peer);
-        }else if(store!=null){currentPeer=peer;screen="chat";render();}
+        }else if(store!=null&&node!=null){currentPeer=peer;screen="chat";render();}
     }
     private void intro(){new AlertDialog.Builder(this).setTitle("Bienvenido a NODO")
         .setMessage("Crea tu perfil para aparecer con tu nombre cuando otro teléfono NODO esté en la misma red Wi-Fi local.")
@@ -84,8 +131,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
             .setNegativeButton("Rechazar",(a,b)->answer.accept(false)).show());
     }
     @Override public void incoming(LocalNode.Peer p,String kind,String body,String path,String filename){
-        store.peerName(p.id,p.name);
-        store.saveMessage(p.id,store.newMessage(false,kind,body,path,filename,true));
+        // NodoService always persists received messages, including when no Activity exists.
         ui(()->{
             if(screen.equals("chat")&&currentPeer.equals(p.id)&&foreground)render();
             else {
@@ -99,7 +145,6 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         ui(()->{
             if(isFinishing()){node.rejectCall(p.id);return;}
             pendingCaller=p.id;
-            NodeAlerts.incomingCall(this,store,p.id,p.name);
             if(foreground)showIncomingCallDialog(p.id);
         });
     }
@@ -191,12 +236,13 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     }
     private void render(){
         root=v();root.setBackgroundColor(BG);setContentView(root);
-        // Account for the real system bars and on-screen keyboard on Android 11+.
+        // Android 15+ draws behind system bars. Respect actual bar AND keyboard insets
+        // instead of using a fixed top margin that would fail on different devices.
         if(Build.VERSION.SDK_INT>=30){
             root.setOnApplyWindowInsetsListener((view,insets)->{
                 android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.statusBars()|WindowInsets.Type.navigationBars());
                 android.graphics.Insets keyboard=insets.getInsets(WindowInsets.Type.ime());
-                int top=bars.top+dp(5),bottom=Math.max(bars.bottom,keyboard.bottom);
+                int top=bars.top+dp(5), bottom=Math.max(bars.bottom,keyboard.bottom);
                 if(view.getPaddingTop()!=top||view.getPaddingBottom()!=bottom)
                     view.setPadding(0,top,0,bottom);
                 return insets;
@@ -259,7 +305,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
                 .setMessage("Tu dispositivo ya está anunciándose como NODO-"+store.id().substring(0,8)+". Para enlazar, abre NODO en otro teléfono en la misma red Wi-Fi, entra en Cercanos y pulsa Enlazar. No necesitas acceso a internet.")
                 .setPositiveButton("Entendido",null).show();
         }),lp(-1,48));
-        gap(body,12);body.addView(txt("La conexión automática funciona con personas ya autorizadas, mientras la aplicación se mantiene activa.",12,MUTED,false));
+        gap(body,12);body.addView(txt("Reconexión automática con contactos autorizados. Para recibir mensajes al cerrar la pantalla, activa Segundo plano en Ajustes.",12,MUTED,false));
     }
     private void showChats(LinearLayout body){
         title(body,"Chats","Mensajes, fotos, archivos y notas de voz");gap(body,14);
@@ -333,12 +379,13 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         settingsRow(body,"☷","Chats","Exportar conversación o borrar mensajes",this::chatSettings);
         settingsRow(body,"◈","Notificaciones y sonidos","Tonos de mensajes y llamadas",this::notificationSettings);
         settingsRow(body,"◎","Conectividad","Reconexión y tecnología de red",this::connectivitySettings);
+        settingsRow(body,"◌","Segundo plano","Mantener NODO conectado al cerrar la pantalla",this::backgroundSettings);
         settingsRow(body,"▣","Almacenamiento y datos","Archivos de hasta 30 MB",this::storageSettings);
         settingsRow(body,"♧","Dispositivos autorizados","Consultar y revocar confianza",this::privacySettings);
         settingsRow(body,"◐","Apariencia","Estilo original blanco y menta",()->info("Apariencia","NODO utiliza el diseño blanco, verde menta y azul elegido. Temas adicionales vendrán después."));
         settingsRow(body,"?","Ayuda","Cómo conectar dos Android",this::help);
         settingsRow(body,"↗","Invitar amigos","Compartir información sobre NODO",this::shareInvite);
-        gap(body,14);body.addView(txt("NODO v0.2.0 · Prototipo alfa · Solo para pruebas. Los chats de esta versión aún NO tienen cifrado de extremo a extremo.",12,MUTED,false));
+        gap(body,14);body.addView(txt("NODO v0.3.0 · Prototipo alfa · Solo para pruebas. Los chats de esta versión aún NO tienen cifrado de extremo a extremo.",12,MUTED,false));
     }
     private void settingsRow(LinearLayout body,String icon,String name,String sub,Runnable action){
         LinearLayout c=card();LinearLayout row=h();
@@ -462,8 +509,15 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     private void runMicAction(){
         String a=micAction;micAction="";
         if(a.equals("record"))startRecorder();
-        else if(a.startsWith("answer:"))node.acceptCall(a.substring(7));
-        else if(a.startsWith("startcall:"))node.startAudio(a.substring(10));
+        else if(a.startsWith("answer:")){
+            if(nodoService!=null)nodoService.captureMicrophone(true);
+            node.acceptCall(a.substring(7));
+            if(nodoService!=null && !node.isCalling())nodoService.captureMicrophone(false);
+        } else if(a.startsWith("startcall:")){
+            if(nodoService!=null)nodoService.captureMicrophone(true);
+            node.startAudio(a.substring(10));
+            if(nodoService!=null && !node.isCalling())nodoService.captureMicrophone(false);
+        }
         else if(a.startsWith("outgoing:"))makeOutgoingCall(a.substring(9));
     }
     private void startRecorder(){
@@ -502,7 +556,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     }
     private void makeOutgoingCall(String peer){callPeer=peer;node.offerCall(peer);screen="call";render();}
     private void showCall(){
-        LinearLayout top=h();pad(top,17,20,17,14);TextView back=txt("‹",29,DARK,true);back.setOnClickListener(w->{node.endCall();screen="chats";render();});top.addView(back);
+        LinearLayout top=h();pad(top,17,20,17,14);TextView back=txt("‹",29,DARK,true);back.setOnClickListener(w->{node.endCall();if(nodoService!=null)nodoService.captureMicrophone(false);screen="chats";render();});top.addView(back);
         TextView title=txt("Llamada de voz",21,DARK,true);title.setGravity(Gravity.CENTER);
         top.addView(title,new LinearLayout.LayoutParams(0,-2,1));root.addView(top);
         LinearLayout center=v();center.setGravity(Gravity.CENTER);pad(center,20,25,20,20);
@@ -519,7 +573,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         root.addView(buttons);
         TextView end=txt("☎  Finalizar llamada",18,Color.WHITE,true);end.setGravity(Gravity.CENTER);end.setBackground(shape(Color.rgb(234,67,83),24));
         LinearLayout.LayoutParams e=lp(-1,54);e.setMargins(dp(30),dp(6),dp(30),dp(30));root.addView(end,e);
-        end.setOnClickListener(w->{node.endCall();screen="chats";render();});
+        end.setOnClickListener(w->{node.endCall();if(nodoService!=null)nodoService.captureMicrophone(false);screen="chats";render();});
     }
     private void openLocal(String path){
         File file=new File(path);if(!file.isFile()){toast("No se encontró el archivo");return;}
@@ -589,10 +643,43 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         callSounds.setChecked(store.callSounds());callSounds.setTextColor(DARK);
         callSounds.setOnCheckedChangeListener((v,on)->store.callSounds(on));
         content.addView(callSounds);gap(content,12);
-        content.addView(txt("Usa los sonidos del teléfono. Personaliza el tono de mensajes desde Android. Los avisos funcionan mientras NODO permanezca en ejecución.",13,MUTED,false));gap(content,12);
-        content.addView(button("Configurar sonidos en Android",()->NodeAlerts.openSystemSoundSettings(this)),lp(-1,48));
+        TextView note=txt("Usa los sonidos del teléfono. Puedes cambiar el tono de los mensajes desde las opciones de notificaciones de Android. Los avisos funcionan mientras NODO permanezca en ejecución.",13,MUTED,false);
+        content.addView(note);gap(content,12);
+        TextView system=button("Configurar sonidos en Android",()->NodeAlerts.openSystemSoundSettings(this));
+        content.addView(system,lp(-1,48));
         new AlertDialog.Builder(this).setTitle("Notificaciones de NODO")
             .setView(content).setPositiveButton("Listo",null).show();
+    }
+    private void backgroundSettings(){
+        LinearLayout layout=v();pad(layout,22,9,22,9);
+        Switch enabled=new Switch(this);
+        enabled.setText("Mantener NODO activo en segundo plano");
+        enabled.setTextColor(DARK);enabled.setChecked(store.backgroundEnabled());
+        enabled.setOnCheckedChangeListener((button,active)->{
+            store.backgroundEnabled(active);
+            if(active){
+                try{NodoService.start(this);toast("NODO permanecerá conectado");}
+                catch(Exception e){toast("No se pudo iniciar el servicio: "+e.getMessage());}
+            }else{
+                NodoService.stopBackground(this);
+                toast("Segundo plano desactivado. NODO funcionará mientras esté abierto.");
+            }
+        });
+        layout.addView(enabled);gap(layout,12);
+        layout.addView(txt("Con la opción activada se mostrará una notificación permanente de NODO conectado. "
+            +"Podrás recibir mensajes y llamadas mientras uses otras apps o apagues la pantalla, si Android lo permite.",13,MUTED,false));
+        gap(layout,10);
+        layout.addView(txt("Importante: ambos teléfonos deben seguir en la misma red Wi-Fi o punto de acceso. "
+            +"Si desconectas Wi-Fi, fuerzas el cierre de NODO o Android restringe su batería, el enlace puede interrumpirse.",13,MUTED,false));
+        gap(layout,13);
+        TextView battery=button("Abrir ajustes de batería",()->{
+            Intent intent=new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:"+getPackageName()));
+            try{startActivity(intent);}catch(Exception e){toast("Abre Ajustes > Apps > NODO > Batería");}
+        });
+        layout.addView(battery,lp(-1,48));
+        new AlertDialog.Builder(this).setTitle("NODO en segundo plano")
+            .setView(layout).setPositiveButton("Listo",null).show();
     }
     private void connectivitySettings(){
         LinearLayout layout=v();pad(layout,22,10,22,10);
@@ -633,7 +720,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         info("Almacenamiento","Archivos guardados: "+files+"\nEspacio aproximado: "+(size/1024)+" KB\n\nTamaño máximo por transferencia: 30 MB. Los archivos están en el almacenamiento privado de NODO; puedes abrirlos desde Archivos.");
     }
     private void help(){info("Cómo conectar NODO",
-        "1. Instala y abre NODO en dos teléfonos Android.\n\n2. Conéctalos al mismo Wi-Fi. Puede ser el hotspot de un teléfono sin internet.\n\n3. Abre Cercanos y toca Enlazar. El otro usuario debe aceptar.\n\n4. Abre Chats para enviar texto, notas de voz y archivos, o iniciar llamada de voz.\n\n5. La reconexión automática solo se aplica a usuarios autorizados, cuando NODO está activo.\n\nNODO alfa no ofrece aún Bluetooth, Wi-Fi Direct, videollamadas, internet remoto ni cifrado de extremo a extremo.");}
+        "1. Instala y abre NODO en dos teléfonos Android.\n\n2. Conéctalos al mismo Wi-Fi. Puede ser el hotspot de un teléfono sin internet.\n\n3. Abre Cercanos y toca Enlazar. El otro usuario debe aceptar.\n\n4. Abre Chats para enviar texto, notas de voz y archivos, o iniciar llamada de voz.\n\n5. La reconexión automática solo se aplica a usuarios autorizados. Para seguir activo con pantalla apagada, usa Ajustes > Segundo plano.\n\nNODO alfa usa Wi-Fi local. Bluetooth, Wi-Fi Direct, videollamadas, internet remoto y cifrado de extremo a extremo siguen pendientes. Android puede detener la app por ahorro de batería.");}
     private void shareInvite(){
         Intent share=new Intent(Intent.ACTION_SEND);share.setType("text/plain");
         share.putExtra(Intent.EXTRA_TEXT,"Te invito a probar NODO, una app de mensajes y llamadas por Wi-Fi local sin depender de internet. Necesitamos instalar NODO en ambos Android y usar la misma red Wi-Fi.");
@@ -648,15 +735,18 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         else if(req==REQUEST_PHOTO)saveProfilePhoto(data.getData());
     }
     @Override public void onBackPressed(){
-        if(screen.equals("call")){node.endCall();screen="chats";render();}
+        if(screen.equals("call")){node.endCall();if(nodoService!=null)nodoService.captureMicrophone(false);screen="chats";render();}
         else if(screen.equals("chat")){if(recording)stopRecorder(false);screen="chats";render();}
         else if(!screen.equals("discover")){screen="discover";render();}
         else super.onBackPressed();
     }
     @Override protected void onDestroy(){
-        if(recording)stopRecorder(false);if(player!=null){player.release();player=null;}
-        NodeAlerts.clearCall(this);
-        if(node!=null)node.stop();super.onDestroy();
+        if(recording)stopRecorder(false);
+        if(player!=null){player.release();player=null;}
+        if(nodoService!=null)nodoService.detach(this);
+        if(bindRequested){unbindService(connection);bindRequested=false;bound=false;}
+        // The service—not this screen—keeps listening for peers and calls.
+        super.onDestroy();
     }
     /** A decorative abstract radar; the UI never pretends to measure distance. */
     private final class Radar extends View{
