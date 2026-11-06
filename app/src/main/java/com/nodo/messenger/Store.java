@@ -21,6 +21,14 @@ public final class Store {
     public void status(String s){p.edit().putString("status",s).apply();}
     public boolean autoConnect(){return p.getBoolean("autoconnect",true);}
     public void autoConnect(boolean b){p.edit().putBoolean("autoconnect",b).apply();}
+    public boolean messageNotifications(){return p.getBoolean("message_notifications",true);}
+    public void messageNotifications(boolean on){p.edit().putBoolean("message_notifications",on).apply();}
+    public boolean messageSounds(){return p.getBoolean("message_sounds",true);}
+    public void messageSounds(boolean on){p.edit().putBoolean("message_sounds",on).apply();}
+    public boolean callNotifications(){return p.getBoolean("call_notifications",true);}
+    public void callNotifications(boolean on){p.edit().putBoolean("call_notifications",on).apply();}
+    public boolean callSounds(){return p.getBoolean("call_sounds",true);}
+    public void callSounds(boolean on){p.edit().putBoolean("call_sounds",on).apply();}
     public String avatar(){return p.getString("avatar","");}
     public void avatar(String a){p.edit().putString("avatar",a).apply();}
     public boolean trusted(String id){return p.getBoolean("trust_"+id,false);}
