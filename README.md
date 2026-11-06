@@ -1,22 +1,23 @@
-# NODO Beta v0.4.1 — instalación paralela y firma permanente
+# NODO Beta 0.5.0 — prueba por Wi-Fi local
 
-**Importante:** la 0.1, 0.2, 0.3 y 0.4 originales fueron firmadas con distintas claves efímeras del runner de GitHub. No se pueden actualizar entre sí sin la clave original. **NO desinstalar la aplicación original antes de exportar los chats importantes.**
+Esta revisión prioriza la fiabilidad. **NODO Beta** (`com.nodo.messenger.beta`) permanece independiente de NODO original y usa la firma privada persistente de la versión 0.4.1 Beta.
 
-Esta rama de NODO permite instalar **NODO Beta** junto a NODO original, sin sobrescribir sus datos:
-- Application ID: `com.nodo.messenger.beta`.
-- Nombre visible: `NODO Beta`.
-- Versión: `0.4.1-beta` (`versionCode 41`).
-- Proveedor de archivos propio con autoridad `com.nodo.messenger.beta.files`.
-- Misma experiencia y funciones de NODO 0.4 alfa; contactos e historial separados de la app anterior.
+## Mejoras
+- Servicio de red en primer plano, bloqueo Wi-Fi mientras está activado, WakeLock durante la conexión activa y receptor para volver a arrancar si Android permite el inicio después de reiniciar.
+- Recuperación de conexión mediante endpoints mDNS conocidos; pings periódicos para detectar enlaces muertos.
+- Mensajes de texto con un ID único y acuse de recibo: una sola rutina de reintentos en el servicio y deduplicación del lado receptor. Compatibilidad básica con NODO 0.4 (sin acuse de recibo).
+- Notas de voz con pausar, continuar, detener, **escuchar antes de enviar**, enviar o descartar.
+- Contador de tiempo de llamada de voz.
+- Grupos locales de contactos previamente autorizados; mensajes de grupo entre miembros que están conectados en ese momento.
+- **Llamada grupal experimental hasta cuatro participantes** sobre la misma LAN con el creador como retransmisor de audio; requiere aceptación de cada miembro. El audio simultáneo, el eco y la latencia todavía deben probarse y optimizarse.
 
-## Firma permanente (necesaria para actualizaciones futuras)
+## Limitaciones expresas
+- La conexión funciona en **la misma red Wi-Fi o punto de acceso compartido** sin salida a Internet. NO está implementada aún la conexión por Bluetooth, Wi-Fi Direct, ni la red en malla con saltos. Encender solo Wi-Fi o Bluetooth no implica conexión entre dispositivos.
+- Android no garantiza servicios permanentes después de **Forzar detención**, restricciones intensas de batería, cierre de permisos o apagado del Wi-Fi. Mantén autorizado el servicio en segundo plano y revisa el ahorro de batería; habrá una notificación de NODO conectado.
+- La deduplicación de mensajes solo queda garantizada entre versiones nuevas con identificadores y acuses. Si un teléfono usa una versión vieja, puede haber limitaciones de compatibilidad.
+- Los mensajes grupales **no se almacenan para reenviarlos** a miembros desconectados; para probar un grupo, conecta primero a todos. Solo archivos y audios individuales están disponibles.
+- La llamada grupal es beta y requiere prueba entre varios dispositivos. A diferencia de una infraestructura profesional, esta retransmisión básica puede generar latencia o eco cuando hablan varias personas a la vez.
+- No existe cifrado de extremo a extremo; usar solo en redes privadas de confianza para pruebas. No usar para información confidencial ni comunicaciones de emergencia.
 
-No guardar keystores ni contraseñas en Git, especialmente porque este repositorio es público. La rama espera estos secretos de GitHub Actions:
-1. `NODO_KEYSTORE_B64`: contenido base64 del archivo privado `nodo-beta-signing.p12`.
-2. `NODO_KEYSTORE_PASSWORD`: contraseña del keystore/alias `nodo`.
-
-Configura los secretos en **Settings → Secrets and variables → Actions**. Con ambos presentes, el workflow compila un **release firmado**. Si faltan, compila un APK **sin firmar** que no debe instalarse. Conserva una copia privada del keystore y contraseña, porque **todas las futuras actualizaciones de Beta requieren la misma clave**. La firma no permite actualizar NODO original, solo futuras versiones de NODO Beta.
-
-Para ensayar la instalación paralela, detener el servicio en segundo plano de la aplicación NODO original antes de usar Beta; las dos versiones pueden competir por el mismo puerto de comunicación si se ejecutan juntas en el mismo dispositivo.
-
-> Estado: prototipo para pruebas; sin cifrado de extremo a extremo. Se necesita Wi-Fi o punto de acceso común, y aún no hay videollamadas ni Bluetooth/Wi-Fi Direct.
+## Publicación y firma
+La rama `nodo-beta` compila en GitHub Actions. Si no existen los secretos `NODO_KEYSTORE_B64` y `NODO_KEYSTORE_PASSWORD`, la compilación de GitHub produce un APK **SIN FIRMAR** que no puede instalarse directamente. Para esta versión, el APK se firma fuera de GitHub usando la **misma clave** que se empleó en NODO Beta v0.4.1 y se verifica que el certificado es idéntico. Conserva la clave fuera del repositorio público y no la compartas.

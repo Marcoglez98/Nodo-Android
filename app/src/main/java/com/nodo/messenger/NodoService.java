@@ -27,9 +27,14 @@ public final class NodoService extends Service implements LocalNode.Listener {
     private Store store;
     private LocalNode node;
     private volatile LocalNode.Listener uiListener;
+    private android.os.PowerManager.WakeLock wakeLock;
     private boolean promoted=false;
     private boolean capturingAudio=false;
     private String incomingPeer="";
+    private String incomingGroupId="";
+    private String incomingGroupName="";
+    private final Map<String,Long> textInFlight=new java.util.concurrent.ConcurrentHashMap<>();
+    private Runnable retryQueued;
     private PendingPair pendingPair;
 
     public final class LocalBinder extends Binder {
@@ -49,6 +54,12 @@ public final class NodoService extends Service implements LocalNode.Listener {
         }
         node=new LocalNode(getApplicationContext(),store,this);
         node.start();
+        retryQueued=new Runnable(){
+            @Override public void run(){
+                if(node!=null){flushPending();main.postDelayed(this,4500);}
+            }
+        };
+        main.postDelayed(retryQueued,1200);
     }
 
     @Override public int onStartCommand(Intent intent,int flags,int startId){
@@ -76,12 +87,40 @@ public final class NodoService extends Service implements LocalNode.Listener {
     LocalNode network(){return node;}
     boolean enabled(){return store.backgroundEnabled();}
     String pendingCaller(){return incomingPeer;}
+    String pendingGroup(){return incomingGroupId;}
+    String pendingGroupName(){return incomingGroupName;}
+    void queueText(String peer,String text){
+        if(peer==null||text==null||text.trim().isEmpty())return;
+        store.saveMessage(peer,store.newMessage(true,"text",text,"","",false));
+        main.post(this::flushPending);
+    }
+    void queueGroupText(String gid,String text){
+        if(gid==null||text==null||text.trim().isEmpty())return;
+        String groupKey="group:"+gid;
+        List<String> members=store.groupMembers(gid);
+        int delivered=node.sendGroupText(gid,store.groupName(gid),members,
+            UUID.randomUUID().toString(),text);
+        store.saveMessage(groupKey,store.newMessage(true,"text",text,"","",delivered>0));
+    }
+    void announceGroup(String gid){node.sendGroupInfo(gid,store.groupName(gid),store.groupMembers(gid));}
+    void acceptGroup(String peer){
+        incomingPeer="";incomingGroupId="";incomingGroupName="";
+        NodeAlerts.clearCall(this);node.acceptGroupCall(peer);
+    }
+    void rejectGroup(String peer){
+        incomingPeer="";incomingGroupId="";incomingGroupName="";
+        NodeAlerts.clearCall(this);node.rejectGroupCall(peer);
+    }
+
+
 
     void attach(LocalNode.Listener listener){
         uiListener=listener;
         if(pendingPair!=null) deliverPendingPair(listener);
         if(incomingPeer.length()>0 && listener!=null && node.isCalling()) {
-            listener.callOffer(new LocalNode.Peer(incomingPeer,store.peerName(incomingPeer)));
+            if(incomingGroupId!=null && !incomingGroupId.isEmpty())
+                listener.groupCallOffer(new LocalNode.Peer(incomingPeer,store.peerName(incomingPeer)),incomingGroupId,incomingGroupName);
+            else listener.callOffer(new LocalNode.Peer(incomingPeer,store.peerName(incomingPeer)));
         }
     }
     void detach(LocalNode.Listener listener){if(uiListener==listener)uiListener=null;}
@@ -111,6 +150,13 @@ public final class NodoService extends Service implements LocalNode.Listener {
                 startForeground(ONGOING_ID,n,mask);
             } else startForeground(ONGOING_ID,n);
             promoted=true;
+            if(wakeLock==null){
+                android.os.PowerManager power=getSystemService(android.os.PowerManager.class);
+                if(power!=null){
+                    wakeLock=power.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK,"nodo:conexion-local");
+                    wakeLock.setReferenceCounted(false);wakeLock.acquire();
+                }
+            }
         }catch(RuntimeException ex){
             // Never claim background operation if the OS denied required permissions.
             promoted=false;
@@ -150,12 +196,19 @@ public final class NodoService extends Service implements LocalNode.Listener {
     }
     private void disableForeground(){
         promoted=false;capturingAudio=false;
+        if(wakeLock!=null){if(wakeLock.isHeld())wakeLock.release();wakeLock=null;}
         if(Build.VERSION.SDK_INT>=24)stopForeground(STOP_FOREGROUND_REMOVE);
         else stopForeground(true);
     }
 
+    @Override public void onTaskRemoved(Intent rootIntent){
+        // Keep the explicitly enabled foreground service running when the task is swiped away.
+        // Android may still stop it if the user forces the app to stop or revokes permissions.
+        super.onTaskRemoved(rootIntent);
+    }
     @Override public void onDestroy(){
         pendingPair=null;
+        main.removeCallbacks(retryQueued);
         NodeAlerts.clearCall(this);
         if(node!=null)node.stop();
         disableForeground();
@@ -171,15 +224,58 @@ public final class NodoService extends Service implements LocalNode.Listener {
         });
     }
     private void flushPending(){
+        if(node==null)return;
+        long now=System.currentTimeMillis();
+        for(String gid:store.groups())node.sendGroupInfo(gid,store.groupName(gid),store.groupMembers(gid));
         for(String id:store.contacts())if(node.isConnected(id)){
             JSONArray messages=store.messages(id);
             for(int i=0;i<messages.length();i++){
                 JSONObject m=messages.optJSONObject(i);
-                if(m!=null && m.optBoolean("out") && "text".equals(m.optString("kind")) && !m.optBoolean("sent")){
-                    if(node.send(id,"text",m.optString("body"))) store.markSent(id,m.optString("mid"));
+                if(m==null||!m.optBoolean("out")||!"text".equals(m.optString("kind"))||m.optBoolean("sent"))continue;
+                String mid=m.optString("mid");String key=id+":"+mid;
+                Long started=textInFlight.get(key);
+                if(started!=null && now-started<12000)continue;
+                if(node.sendText(id,mid,m.optString("body"))){
+                    if(node.supportsAck(id))textInFlight.put(key,now);
+                    else store.markSent(id,mid); // Earlier NODO clients do not understand ACK.
                 }
             }
         }
+    }
+    @Override public void delivered(LocalNode.Peer peer,String mid){
+        if(mid==null||mid.isEmpty())return;
+        store.markSent(peer.id,mid);
+        synchronized(textInFlight){textInFlight.remove(peer.id+":"+mid);}
+        LocalNode.Listener listener=uiListener;
+        if(listener!=null) main.post(()->{if(uiListener==listener)listener.changed();});
+    }
+    @Override public void groupIncoming(LocalNode.Peer peer,String gid,String gname,List<String> members,String mid,String text){
+        if(gid==null||!gid.matches("[a-f0-9]{32}"))return;
+        if(!members.contains(store.id())||!members.contains(peer.id))return;
+        store.ensureGroup(gid,gname,members);
+        if(store.saveIncomingOnce("group:"+gid,mid,"text",text,"","")){
+            LocalNode.Listener listener=uiListener;
+            if(listener!=null)main.post(()->listener.groupIncoming(peer,gid,gname,members,mid,text));
+            else NodeAlerts.message(this,store,"group:"+gid,gname,peer.name+": "+text);
+        }
+    }
+    @Override public void groupKnown(LocalNode.Peer peer,String gid,String name,List<String> members){
+        if(gid!=null&&gid.matches("[a-f0-9]{32}")&&members.contains(peer.id)&&members.contains(store.id())){
+            store.ensureGroup(gid,name,members);
+            LocalNode.Listener listener=uiListener;
+            if(listener!=null)main.post(listener::changed);
+        }
+    }
+    @Override public void groupCallOffer(LocalNode.Peer peer,String gid,String name){
+        incomingPeer=peer.id;incomingGroupId=gid;incomingGroupName=name;
+        NodeAlerts.incomingCall(this,store,peer.id,"Grupo: "+name);
+        LocalNode.Listener listener=uiListener;
+        if(listener!=null)main.post(()->listener.groupCallOffer(peer,gid,name));
+    }
+    @Override public void groupCallChanged(){
+        LocalNode.Listener listener=uiListener;
+        if(listener!=null)main.post(listener::groupCallChanged);
+        main.post(this::updateNotification);
     }
     @Override public void status(String text){
         LocalNode.Listener listener=uiListener;
@@ -233,7 +329,9 @@ public final class NodoService extends Service implements LocalNode.Listener {
 
     @Override public void incoming(LocalNode.Peer p,String kind,String body,String path,String filename){
         store.peerName(p.id,p.name);
-        store.saveMessage(p.id,store.newMessage(false,kind,body,path,filename,true));
+        // Message IDs are supplied by text senders; persist only once.
+        String mid="text".equals(kind)?path:"";
+        if(!store.saveIncomingOnce(p.id,mid,kind,body,"text".equals(kind)?"":path,filename))return;
         LocalNode.Listener listener=uiListener;
         if(listener!=null)listener.incoming(p,kind,body,path,filename);
         else {
@@ -242,20 +340,20 @@ public final class NodoService extends Service implements LocalNode.Listener {
         }
     }
     @Override public void callOffer(LocalNode.Peer p){
-        incomingPeer=p.id;
+        incomingPeer=p.id;incomingGroupId="";incomingGroupName="";
         NodeAlerts.incomingCall(this,store,p.id,p.name);
         LocalNode.Listener listener=uiListener;
         if(listener!=null)listener.callOffer(p);
     }
     @Override public void callAccepted(LocalNode.Peer p){
-        incomingPeer="";
+        incomingPeer="";incomingGroupId="";incomingGroupName="";
         NodeAlerts.clearCall(this);
         LocalNode.Listener listener=uiListener;
         if(listener!=null)listener.callAccepted(p);
         main.post(this::updateNotification);
     }
     @Override public void callEnded(LocalNode.Peer p){
-        incomingPeer="";
+        incomingPeer="";incomingGroupId="";incomingGroupName="";
         NodeAlerts.clearCall(this);
         main.post(()->{captureMicrophone(false);updateNotification();});
         LocalNode.Listener listener=uiListener;

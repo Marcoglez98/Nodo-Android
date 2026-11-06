@@ -39,7 +39,10 @@ public final class Store {
         p.edit().putBoolean("trust_"+id,true).putString("peer_"+id,name).apply();
     }
     public void revoke(String id){p.edit().remove("trust_"+id).apply();}
-    public String peerName(String id){return p.getString("peer_"+id,id.length()>6?id.substring(0,6):id);}
+    public String peerName(String id){
+        if(isGroup(id))return groupName(id.substring(6));
+        return p.getString("peer_"+id,id.length()>6?id.substring(0,6):id);
+    }
     public void peerName(String id,String name){p.edit().putString("peer_"+id,name).apply();}
     public List<String> contacts(){
         Set<String> all =p.getAll().keySet(); List<String> ids=new ArrayList<>();
@@ -53,6 +56,42 @@ public final class Store {
     }
     public synchronized JSONArray messages(String peer){
         try{return new JSONArray(p.getString("messages_"+peer,"[]"));}catch(Exception ex){return new JSONArray();}
+    }
+    public boolean isGroup(String peer){return peer!=null && peer.startsWith("group:");}
+    public synchronized void ensureGroup(String groupId,String name,List<String> members){
+        if(groupId==null || !groupId.matches("[a-f0-9]{32}"))return;
+        List<String> ids=groups();
+        if(!ids.contains(groupId))ids.add(groupId);
+        JSONArray arr=new JSONArray();for(String id:ids)arr.put(id);
+        JSONArray m=new JSONArray();for(String id:members)if(id!=null && id.matches("[a-f0-9]{32}"))m.put(id);
+        p.edit().putString("group_ids",arr.toString()).putString("group_name_"+groupId,name)
+            .putString("group_members_"+groupId,m.toString()).apply();
+    }
+    public synchronized String createGroup(String name,List<String> members){
+        String id=UUID.randomUUID().toString().replace("-","");
+        ensureGroup(id,name,members);return id;
+    }
+    public synchronized List<String> groups(){
+        List<String> ids=new ArrayList<>();
+        try{JSONArray a=new JSONArray(p.getString("group_ids","[]"));for(int i=0;i<a.length();i++)ids.add(a.getString(i));}
+        catch(Exception ignored){}return ids;
+    }
+    public String groupName(String id){return p.getString("group_name_"+id,"Grupo NODO");}
+    public List<String> groupMembers(String id){
+        List<String> ids=new ArrayList<>();
+        try{JSONArray a=new JSONArray(p.getString("group_members_"+id,"[]"));for(int i=0;i<a.length();i++)ids.add(a.getString(i));}
+        catch(Exception ignored){}return ids;
+    }
+    public synchronized boolean saveIncomingOnce(String peer,String mid,String kind,String body,String path,String name){
+        if(mid==null || mid.isEmpty())mid=UUID.randomUUID().toString();
+        JSONArray a=messages(peer);
+        for(int i=Math.max(0,a.length()-1200);i<a.length();i++){
+            JSONObject old=a.optJSONObject(i);
+            if(old!=null && !old.optBoolean("out") && mid.equals(old.optString("mid")))return false;
+        }
+        JSONObject m=newMessage(false,kind,body,path,name,true);
+        try{m.put("mid",mid);}catch(Exception ignored){}
+        a.put(m);p.edit().putString("messages_"+peer,a.toString()).commit();return true;
     }
     public synchronized void saveMessage(String peer,JSONObject msg){
         JSONArray a=messages(peer); a.put(msg);

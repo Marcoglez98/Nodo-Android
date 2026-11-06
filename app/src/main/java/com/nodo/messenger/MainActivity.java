@@ -41,7 +41,10 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
             nodoService.attach(MainActivity.this);
             render();handleLaunch(getIntent());
             String caller=nodoService.pendingCaller();
-            if(caller!=null&&!caller.isEmpty()&&node.isCalling())showIncomingCallDialog(caller);
+            if(caller!=null&&!caller.isEmpty()&&node.isCalling()){
+                if(!nodoService.pendingGroup().isEmpty())showIncomingGroupCallDialog(caller,nodoService.pendingGroup(),nodoService.pendingGroupName());
+                else showIncomingCallDialog(caller);
+            }
         }
         @Override public void onServiceDisconnected(ComponentName name){
             bound=false;node=null;nodoService=null;
@@ -59,7 +62,11 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     private static final String[] STICKERS={"hola","genial","wow","gracias","jaja","bien","ok","amor"};
     private final Handler handler=new Handler(Looper.getMainLooper());
     private String screen="discover",currentPeer="",callPeer="",networkStatus="Iniciando red local…",micAction="";
-    private boolean recording=false,muted=false,loud=false,foreground=false,callDialogOpen=false;
+    private boolean recording=false,recordingPaused=false,muted=false,loud=false,foreground=false,callDialogOpen=false;
+    private long recordingStart=0L,recordedMs=0L;
+    private TextView callTimerLabel;
+    private Runnable callTimer;
+    private String groupCaller="",groupCallerId="";
     private String pendingCaller="";
     private MediaRecorder recorder;private File voiceFile;private MediaPlayer player;
     
@@ -97,7 +104,11 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
             if(pending!=null&&!pending.isEmpty()&&node!=null&&node.isCalling())pendingCaller=pending;
         }
         if(!pendingCaller.isEmpty()&&node!=null&&node.isCalling()){
-            handler.post(()->showIncomingCallDialog(pendingCaller));
+            handler.post(()->{
+                if(nodoService!=null && !nodoService.pendingGroup().isEmpty())
+                    showIncomingGroupCallDialog(pendingCaller,nodoService.pendingGroup(),nodoService.pendingGroupName());
+                else showIncomingCallDialog(pendingCaller);
+            });
         }
     }
     @Override protected void onPause(){
@@ -112,7 +123,10 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         if(peer==null||peer.isEmpty())return;
         intent.removeExtra("nodo_peer");
         if(node!=null && nodoService!=null && node.isCalling() && peer.equals(nodoService.pendingCaller())){
-            if(foreground)showIncomingCallDialog(peer);
+            if(foreground){
+                if(!nodoService.pendingGroup().isEmpty())showIncomingGroupCallDialog(peer,nodoService.pendingGroup(),nodoService.pendingGroupName());
+                else showIncomingCallDialog(peer);
+            }
         }else if(store!=null&&node!=null){currentPeer=peer;screen="chat";render();}
     }
     private void intro(){new AlertDialog.Builder(this).setTitle("Bienvenido a NODO")
@@ -127,6 +141,23 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         if(screen.equals("chat"))refreshChatMessages();
         else if(!screen.equals("call"))render();
     });}
+    @Override public void delivered(LocalNode.Peer p,String mid){ui(()->{
+        if(screen.equals("chat")&&currentPeer.equals(p.id))refreshChatMessages();
+    });}
+    @Override public void groupIncoming(LocalNode.Peer p,String gid,String name,List<String> members,String mid,String body){
+        ui(()->{
+            if(screen.equals("chat")&&currentPeer.equals("group:"+gid)&&foreground)refreshChatMessages();
+            else if(foreground)NodeAlerts.message(this,store,"group:"+gid,name,p.name+": "+body);
+        });
+    }
+    @Override public void groupKnown(LocalNode.Peer p,String gid,String name,List<String> members){ui(()->{
+        if(screen.equals("chats"))render();
+    });}
+    @Override public void groupCallOffer(LocalNode.Peer p,String gid,String name){ui(()->{
+        pendingCaller=p.id;groupCaller=p.id;groupCallerId=gid;
+        if(foreground)showIncomingGroupCallDialog(p.id,gid,name);
+    });}
+    @Override public void groupCallChanged(){ui(()->{if(screen.equals("call"))updateCallTime();});}
     @Override public void status(String s){ui(()->{networkStatus=s;if(screen.equals("discover"))render();});}
     @Override public void pairing(String name,java.util.function.Consumer<Boolean> answer){
         ui(()->new AlertDialog.Builder(this).setTitle("Solicitud de conexión")
@@ -166,6 +197,21 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
                 NodeAlerts.clearCall(this);pendingCaller="";node.rejectCall(id);
             }).setOnDismissListener(d->callDialogOpen=false).show();
     }
+    private void showIncomingGroupCallDialog(String host,String gid,String groupName){
+        if(callDialogOpen || node==null || !node.groupCallActive())return;
+        callDialogOpen=true;
+        new AlertDialog.Builder(this).setTitle("☎ Llamada del grupo "+groupName)
+            .setMessage(store.peerName(host)+" te invita a hablar con el grupo por Wi-Fi local. ¿Unirte?")
+            .setCancelable(false)
+            .setPositiveButton("Unirme",(d,x)->{
+                NodeAlerts.clearCall(this);pendingCaller="";
+                callPeer="group:"+gid;screen="call";render();
+                micAction="groupAnswer:"+host;ensureMicrophone();
+            }).setNegativeButton("Rechazar",(d,x)->{
+                NodeAlerts.clearCall(this);pendingCaller="";
+                if(nodoService!=null)nodoService.rejectGroup(host);else node.rejectGroupCall(host);
+            }).setOnDismissListener(d->callDialogOpen=false).show();
+    }
     @Override public void callAccepted(LocalNode.Peer p){
         ui(()->{
             NodeAlerts.clearCall(this);pendingCaller="";
@@ -180,15 +226,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         });
     }
     private void flushPending(){
-        for(String id:store.contacts())if(node.isConnected(id)){
-            JSONArray a=store.messages(id);
-            for(int i=0;i<a.length();i++){
-                JSONObject m=a.optJSONObject(i);
-                if(m!=null&&m.optBoolean("out")&&m.optString("kind").equals("text")&&!m.optBoolean("sent")){
-                    if(node.send(id,"text",m.optString("body")))store.markSent(id,m.optString("mid"));
-                }
-            }
-        }
+        // Only NodoService may retry pending messages; avoid racing/repeating sends here.
     }
     private int dp(float val){return (int)(getResources().getDisplayMetrics().density*val+0.5f);}
     private GradientDrawable shape(int fill,int radius){
@@ -331,20 +369,49 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     }
     private void showChats(LinearLayout body){
         title(body,"Conversaciones","Cerca de ti, incluso sin internet");gap(body,14);
-        LinearLayout tabs=h();TextView all=pill("Todos",true), near=pill("Conectados",false), groups=pill("Grupos (próximamente)",false);
+        LinearLayout tabs=h();TextView all=pill("Todos",true), near=pill("Conectados",false), groups=pill("Grupos",false);
         all.setOnClickListener(w->toast("Mostrando todas las conversaciones"));
         near.setOnClickListener(w->showOnlineOnly());
-        groups.setOnClickListener(w->featurePending("Grupos"));
-        tabs.addView(all);gapHorizontal(tabs,6);tabs.addView(near);body.addView(tabs);gap(body,12);
+        groups.setOnClickListener(w->createGroupDialog());
+        tabs.addView(all);gapHorizontal(tabs,6);tabs.addView(near);gapHorizontal(tabs,6);tabs.addView(groups);
+        body.addView(tabs);gap(body,10);
+        TextView create=pill("＋ Crear grupo de NODO",true);
+        create.setOnClickListener(w->createGroupDialog());body.addView(create);gap(body,12);
         List<String> ids=store.contacts();
         if(ids.isEmpty()){
             LinearLayout c=card();c.addView(txt("Empieza tu primera conversación",17,DARK,true));gap(c,6);
             c.addView(txt("Ve a Cercanos, encuentra otro teléfono NODO y solicita el enlace.",13,MUTED,false));gap(c,12);
             c.addView(button("Buscar personas",()->{screen="discover";render();}));body.addView(c);
         }
+        for(String gid:store.groups()){
+            String id="group:"+gid;
+            LinearLayout c=contactRow(id);c.setOnClickListener(w->openChat(id));body.addView(c);gap(body,8);
+        }
         for(String id:ids){
             LinearLayout c=contactRow(id);c.setOnClickListener(w->openChat(id));body.addView(c);gap(body,8);
         }
+    }
+    private void createGroupDialog(){
+        List<String> ids=store.contacts();
+        if(ids.isEmpty()){toast("Primero enlaza al menos un contacto en Cercanos");return;}
+        String[] names=new String[ids.size()];boolean[] selected=new boolean[ids.size()];
+        for(int i=0;i<ids.size();i++)names[i]=store.peerName(ids.get(i))+(node.isConnected(ids.get(i))?" · conectado":" · sin conexión");
+        EditText groupName=new EditText(this);groupName.setSingleLine(true);
+        groupName.setHint("Nombre del grupo");groupName.setText("Mi grupo NODO");
+        LinearLayout layout=v();pad(layout,20,7,20,5);
+        layout.addView(txt("Elige las personas que quieres agregar. Se enlazan automáticamente cuando ya estén autorizadas y cerca.",13,MUTED,false));gap(layout,7);
+        layout.addView(groupName);
+        new AlertDialog.Builder(this).setTitle("Nuevo grupo")
+            .setView(layout).setMultiChoiceItems(names,selected,(dialog,index,on)->selected[index]=on)
+            .setPositiveButton("Crear",(dialog,which)->{
+                List<String> members=new ArrayList<>();members.add(store.id());
+                for(int i=0;i<ids.size();i++)if(selected[i])members.add(ids.get(i));
+                if(members.size()<2){toast("Selecciona al menos una persona");return;}
+                String title=groupName.getText().toString().trim();if(title.isEmpty())title="Grupo NODO";
+                String gid=store.createGroup(title,members);
+                if(nodoService!=null)nodoService.announceGroup(gid);
+                currentPeer="group:"+gid;screen="chat";render();
+            }).setNegativeButton("Cancelar",null).show();
     }
     private void showOnlineOnly(){
         List<String> connected=new ArrayList<>();for(String id:store.contacts())if(node.isConnected(id))connected.add(store.peerName(id));
@@ -359,9 +426,14 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         JSONArray a=store.messages(id);JSONObject last=a.optJSONObject(a.length()-1);
         String preview=last==null?"Toca para iniciar chat":last.optString("kind").equals("text")?last.optString("body"):last.optString("kind").equals("voice")?"🎙 Nota de voz":"📎 "+last.optString("name");
         if(preview.length()>48)preview=preview.substring(0,48)+"…";
+        if(store.isGroup(id))preview="👥 "+store.groupMembers(id.substring(6)).size()+" integrantes · "+preview;
         desc.addView(txt(preview,13,MUTED,false));
         row.addView(desc,new LinearLayout.LayoutParams(0,-2,1));
-        TextView connection=txt(node.isConnected(id)?"●":"○",21,node.isConnected(id)?GREEN:MUTED,true);row.addView(connection);
+        boolean connected=node.isConnected(id);
+        if(store.isGroup(id)){
+            for(String member:store.groupMembers(id.substring(6)))if(node.isConnected(member))connected=true;
+        }
+        TextView connection=txt(connected?"●":"○",21,connected?GREEN:MUTED,true);row.addView(connection);
         outer.addView(row);return outer;
     }
     private void showCalls(LinearLayout body){
@@ -373,6 +445,8 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
             LinearLayout row=contactRow(id);row.setOnClickListener(w->call(id));body.addView(row);gap(body,8);
         }
         gap(body,8);
+        body.addView(txt("Llamadas grupales (beta): crea un grupo en Chats y pulsa ☎. Hasta cuatro personas conectadas al mismo Wi-Fi; todos deben aceptar la invitación.",13,MUTED,false));
+        gap(body,9);
         body.addView(button("Videollamadas — ver estado",()->featurePending("Videollamadas por Wi-Fi local")),lp(-1,48));
     }
     private void showFiles(LinearLayout body){
@@ -407,7 +481,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         settingsRow(body,"◐","Apariencia","Estilo original blanco y menta",()->info("Apariencia","NODO utiliza el diseño blanco, verde menta y azul elegido. Temas adicionales vendrán después."));
         settingsRow(body,"?","Ayuda","Cómo conectar dos Android",this::help);
         settingsRow(body,"↗","Invitar amigos","Compartir información sobre NODO",this::shareInvite);
-        gap(body,14);body.addView(txt("NODO v0.4.0 · Versión alfa · Comunicaciones sin cifrado de extremo a extremo. Solo para pruebas.",12,MUTED,false));
+        gap(body,14);body.addView(txt("NODO Beta v0.5.0 · Versión experimental · Comunicaciones sin cifrado de extremo a extremo. Solo para pruebas.",12,MUTED,false));
     }
     private void settingsRow(LinearLayout body,String icon,String name,String sub,Runnable action){
         LinearLayout c=card();LinearLayout row=h();
@@ -424,7 +498,8 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         LinearLayout who=v();pad(who,10,0,2,0);who.addView(txt(store.peerName(currentPeer),17,DARK,true));
         chatStatus=txt("",11,MUTED,false);who.addView(chatStatus);
         bar.addView(who,new LinearLayout.LayoutParams(0,-2,1));
-        TextView call=glyph("☎",GREEN,24);pad(call,7,5,7,5);call.setOnClickListener(w->call(currentPeer));bar.addView(call);
+        TextView call=glyph("☎",GREEN,24);pad(call,7,5,7,5);
+        call.setOnClickListener(w->{if(store.isGroup(currentPeer))startGroupCall(currentPeer.substring(6));else call(currentPeer);});bar.addView(call);
         TextView video=glyph("▣",GREEN,23);pad(video,7,5,3,5);video.setOnClickListener(w->featurePending("Videollamadas"));bar.addView(video);
         root.addView(bar,lp(-1,70));
         TextView tag=txt("◈  Comunicación mediante Wi-Fi local",11,Color.rgb(7,121,87),true);
@@ -436,9 +511,15 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         root.addView(chatScroll,new LinearLayout.LayoutParams(-1,0,1));
         refreshChatMessages();
         if(recording){
-            TextView live=txt("●  Grabando audio · Toca detener para enviarlo",12,Color.rgb(184,52,69),true);
-            live.setBackground(shape(Color.rgb(255,238,241),13));pad(live,18,10,14,10);
-            root.addView(live);
+            LinearLayout recorderBar=h();pad(recorderBar,13,10,13,10);
+            recorderBar.setBackground(shape(Color.rgb(255,238,241),18));
+            TextView status=txt(recordingPaused?"Ⅱ Pausado":"● Grabando…",12,Color.rgb(173,45,66),true);
+            recorderBar.addView(status,new LinearLayout.LayoutParams(0,-2,1));
+            TextView pause=pill(recordingPaused?"▶ Seguir":"Ⅱ Pausar",false);
+            pause.setOnClickListener(v->toggleRecordingPause());recorderBar.addView(pause);
+            TextView done=pill("✓ Revisar",true);done.setOnClickListener(v->stopRecorder(true));recorderBar.addView(done);
+            TextView discard=pill("✕",false);discard.setOnClickListener(v->stopRecorder(false));recorderBar.addView(discard);
+            root.addView(recorderBar);
         }
         LinearLayout input=h();pad(input,11,9,11,9);input.setBackgroundColor(Color.WHITE);input.setElevation(dp(6));
         TextView attach=glyph("+",GREEN,27);ripple(attach,PALE,28);input.addView(attach,lp(39,40));
@@ -464,7 +545,11 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     private void refreshChatMessages(){
         if(chatList==null||node==null||!screen.equals("chat"))return;
         boolean connected=node.isConnected(currentPeer);
-        if(chatStatus!=null){chatStatus.setText(connected?"●  Conectado por Wi-Fi local":"○  Sin conexión · textos en espera");chatStatus.setTextColor(connected?GREEN:MUTED);}
+        if(store.isGroup(currentPeer)){
+            int online=0;for(String member:store.groupMembers(currentPeer.substring(6)))if(node.isConnected(member))online++;
+            connected=online>0;
+            if(chatStatus!=null)chatStatus.setText("👥 "+online+" miembros conectados · Wi-Fi local");
+        }else if(chatStatus!=null){chatStatus.setText(connected?"●  Conectado por Wi-Fi local":"○  Sin conexión · textos en espera");chatStatus.setTextColor(connected?GREEN:MUTED);}
         JSONArray items=store.messages(currentPeer);
         if(items.length()==chatCount && chatList.getChildCount()>0)return;
         chatList.removeAllViews();chatCount=items.length();
@@ -651,10 +736,11 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     private boolean isImage(String name){String s=name.toLowerCase(Locale.ROOT);return s.endsWith(".jpg")||s.endsWith(".jpeg")||s.endsWith(".png")||s.endsWith(".webp")||s.endsWith(".gif");}
     private void sendText(){
         String text=composer.getText().toString().trim();if(text.isEmpty())return;
-        boolean sent=node.send(currentPeer,"text",text);
-        store.saveMessage(currentPeer,store.newMessage(true,"text",text,"","",sent));
+        if(nodoService==null){toast("Iniciando NODO…");return;}
+        if(store.isGroup(currentPeer)){
+            nodoService.queueGroupText(currentPeer.substring(6),text);
+        }else nodoService.queueText(currentPeer,text);
         composer.setText("");refreshChatMessages();
-        if(!sent)toast("Mensaje guardado; se enviará cuando vuelvan a conectarse");
     }
     private void pickFile(){
         if(!node.isConnected(currentPeer)){toast("Conecta primero con tu contacto para enviar archivos");return;}
@@ -693,6 +779,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     }
     private void toggleRecorder(){
         if(recording){stopRecorder(true);return;}
+        if(store.isGroup(currentPeer)){toast("Las notas de voz grupales se incorporarán después");return;}
         if(!node.isConnected(currentPeer)){toast("Se necesita conexión local para enviar audio");return;}
         if(node.isCalling()){toast("Finaliza la llamada antes de grabar una nota");return;}
         micAction="record";ensureMicrophone();
@@ -710,6 +797,10 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     private void runMicAction(){
         String a=micAction;micAction="";
         if(a.equals("record"))startRecorder();
+        else if(a.startsWith("groupAnswer:")){
+            if(nodoService!=null)nodoService.captureMicrophone(true);
+            if(nodoService!=null)nodoService.acceptGroup(a.substring(12));else node.acceptGroupCall(a.substring(12));
+        }else if(a.startsWith("groupOutgoing:"))makeGroupOutgoingCall(a.substring(14));
         else if(a.startsWith("answer:")){
             if(nodoService!=null)nodoService.captureMicrophone(true);
             node.acceptCall(a.substring(7));
@@ -727,15 +818,51 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
             recorder=new MediaRecorder();recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
             recorder.setAudioEncodingBitRate(48000);recorder.setAudioSamplingRate(22050);
-            recorder.setOutputFile(voiceFile.getAbsolutePath());recorder.prepare();recorder.start();recording=true;render();
+            recorder.setOutputFile(voiceFile.getAbsolutePath());recorder.prepare();recorder.start();recording=true;recordingPaused=false;
+            recordedMs=0;recordingStart=android.os.SystemClock.elapsedRealtime();render();
         }catch(Exception ex){recording=false;if(recorder!=null)recorder.release();recorder=null;toast("Error al grabar: "+ex.getMessage());}
     }
-    private void stopRecorder(boolean send){
-        if(!recording)return;recording=false;boolean success=true;
+    private void toggleRecordingPause(){
+        if(!recording||recorder==null)return;
+        try{
+            if(recordingPaused){recorder.resume();recordingStart=android.os.SystemClock.elapsedRealtime();recordingPaused=false;}
+            else{recorder.pause();recordedMs+=android.os.SystemClock.elapsedRealtime()-recordingStart;recordingPaused=true;}
+            render();
+        }catch(Exception e){toast("No se pudo pausar: "+e.getMessage());}
+    }
+    private void stopRecorder(boolean preview){
+        if(!recording)return;
+        recording=false;
+        boolean success=true;
         try{recorder.stop();}catch(Exception ex){success=false;}
         try{recorder.release();}catch(Exception ignored){}recorder=null;
-        if(send&&success&&voiceFile!=null&&voiceFile.length()>0)transmitFile(currentPeer,voiceFile,"Nota_de_voz.m4a",true);
-        else if(voiceFile!=null)voiceFile.delete();render();
+        recordingPaused=false;recordingStart=0;
+        final File draft=voiceFile;voiceFile=null;
+        if(!preview||!success||draft==null||draft.length()==0){
+            if(draft!=null)draft.delete();render();return;
+        }
+        render();previewRecording(draft,currentPeer);
+    }
+    private void previewRecording(File draft,String peer){
+        LinearLayout body=v();pad(body,20,8,20,10);
+        body.addView(txt("Escucha tu nota antes de enviarla. Puedes reproducirla, descartarla o enviarla.",14,MUTED,false));
+        gap(body,12);
+        TextView time=txt("🎙 Nota de voz · "+voiceDuration(draft.getAbsolutePath()),16,DARK,true);
+        body.addView(time);gap(body,12);
+        TextView play=button("▶ Escuchar grabación",()->{
+            if(player!=null && draft.getAbsolutePath().equals(audioPath) && player.isPlaying()){
+                player.pause();return;
+            }
+            playNote(draft.getAbsolutePath());
+        });body.addView(play,lp(-1,50));
+        final boolean[] sent={false};
+        new AlertDialog.Builder(this).setTitle("Vista previa del audio")
+            .setView(body).setPositiveButton("➤ Enviar",(d,x)->{
+                sent[0]=true;stopVoicePlayback();
+                transmitFile(peer,draft,"Nota_de_voz.m4a",true);
+            }).setNegativeButton("Descartar",(d,x)->{})
+            .setOnDismissListener(d->{stopVoicePlayback();if(!sent[0])draft.delete();})
+            .show();
     }
     private void playNote(String path){
         if(path.isEmpty()||!new File(path).isFile()){toast("Audio no disponible");return;}
@@ -756,15 +883,49 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         makeOutgoingCall(peer);
     }
     private void makeOutgoingCall(String peer){callPeer=peer;node.offerCall(peer);screen="call";render();}
+    private void startGroupCall(String gid){
+        if(node.isCalling()){toast("Ya tienes una llamada activa");return;}
+        int online=0;for(String member:store.groupMembers(gid))if(node.isConnected(member))online++;
+        if(online==0){toast("Conecta primero a los integrantes del grupo");return;}
+        micAction="groupOutgoing:"+gid;ensureMicrophone();
+    }
+    private void makeGroupOutgoingCall(String gid){
+        if(nodoService!=null)nodoService.captureMicrophone(true);
+        node.offerGroupCall(gid,store.groupName(gid),store.groupMembers(gid));
+        if(node.groupCallActive()){
+            node.startAudio("group:"+gid);
+            callPeer="group:"+gid;screen="call";render();
+        }else{
+            if(nodoService!=null)nodoService.captureMicrophone(false);
+            toast("No se pudo crear la llamada grupal");
+        }
+    }
+    private void updateCallTime(){
+        if(callTimerLabel==null||node==null||!screen.equals("call"))return;
+        long sec=node.callDuration();
+        callTimerLabel.setText(sec<0?"Esperando respuesta…":String.format(Locale.getDefault(),"%02d:%02d:%02d",sec/3600,(sec/60)%60,sec%60));
+    }
+
     private void showCall(){
         LinearLayout top=h();pad(top,17,20,17,14);TextView back=txt("‹",29,DARK,true);back.setOnClickListener(w->{node.endCall();if(nodoService!=null)nodoService.captureMicrophone(false);screen="chats";render();});top.addView(back);
-        TextView title=txt("Llamada de voz",21,DARK,true);title.setGravity(Gravity.CENTER);
+        TextView title=txt(node.groupCallActive()?"Llamada grupal · Beta":"Llamada de voz",21,DARK,true);
+        title.setGravity(Gravity.CENTER);
         top.addView(title,new LinearLayout.LayoutParams(0,-2,1));root.addView(top);
         LinearLayout center=v();center.setGravity(Gravity.CENTER);pad(center,20,25,20,20);
         TextView status=pill("◉ Conexión por Wi-Fi local",true);center.addView(status);
         gap(center,35);center.addView(avatar(callPeer,150));gap(center,18);
         TextView person=txt(store.peerName(callPeer),25,DARK,true);person.setGravity(Gravity.CENTER);center.addView(person);
-        gap(center,8);TextView desc=txt("Llamada local · audio de prueba",13,MUTED,false);desc.setGravity(Gravity.CENTER);center.addView(desc);
+        gap(center,8);
+        TextView desc=txt(node.groupCallActive()?"👥 "+node.groupCallParticipants()+" participantes · Audio de prueba":"Llamada local · Wi-Fi",13,MUTED,false);
+        desc.setGravity(Gravity.CENTER);center.addView(desc);
+        gap(center,11);
+        callTimerLabel=txt("Conectando…",25,GREEN,true);callTimerLabel.setGravity(Gravity.CENTER);center.addView(callTimerLabel);
+        updateCallTime();
+        if(callTimer!=null)handler.removeCallbacks(callTimer);
+        callTimer=new Runnable(){@Override public void run(){
+            if(screen.equals("call")&&node!=null){updateCallTime();handler.postDelayed(this,1000);}
+        }};
+        handler.postDelayed(callTimer,1000);
         root.addView(center,new LinearLayout.LayoutParams(-1,0,1));
         LinearLayout buttons=h();buttons.setGravity(Gravity.CENTER);pad(buttons,12,10,12,20);
         TextView mute=pill(muted?"Micrófono apagado":"🎙 Silenciar",false);
@@ -935,6 +1096,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         else super.onBackPressed();
     }
     @Override protected void onDestroy(){
+        if(callTimer!=null)handler.removeCallbacks(callTimer);
         stopVoicePlayback();
         if(recording)stopRecorder(false);
         if(player!=null){player.release();player=null;}

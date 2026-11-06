@@ -8,16 +8,14 @@ android {
         applicationId 'com.nodo.messenger.beta'
         minSdk 26
         targetSdk 35
-        versionCode 41
-        versionName '0.4.1-beta'
+        versionCode 50
+        versionName '0.5.0-beta'
     }
 
-    // Firma estable opcional, cargada desde secretos de GitHub Actions.
-    // Nunca subir el archivo de claves al repositorio público.
     def nodoSigningFile = System.getenv("NODO_SIGNING_FILE")
     signingConfigs {
         nodoRelease {
-            if (nodoSigningFile) {
+            if(nodoSigningFile){
                 storeFile file(nodoSigningFile)
                 storePassword System.getenv("NODO_SIGNING_PASSWORD")
                 keyAlias 'nodo'
@@ -29,7 +27,7 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            if (nodoSigningFile) signingConfig signingConfigs.nodoRelease
+            if(nodoSigningFile)signingConfig signingConfigs.nodoRelease
         }
         debug { applicationIdSuffix '' }
     }
