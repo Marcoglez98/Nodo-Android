@@ -17,13 +17,12 @@ jobs:
           set -euo pipefail
           test -f bootstrap/nodo-sources.tar.gz
           tar -xzf bootstrap/nodo-sources.tar.gz
-          rm -rf bootstrap
-          rm -f .github/workflows/bootstrap.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
+          # GitHub App tokens cannot create or modify workflow files. Only stage app files.
+          git add README.md app build.gradle gradle.properties settings.gradle .gitignore
           if ! git diff --staged --quiet; then
-            git commit -m "Añadir NODO Android v0.1 alfa y flujo APK"
+            git commit -m "Añadir código fuente NODO Android v0.1 alfa"
             git push origin HEAD:main
           fi
       - name: Preparar Java 17
