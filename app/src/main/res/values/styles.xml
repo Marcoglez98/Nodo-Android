@@ -1,0 +1,11 @@
+<resources>
+    <style name="NodoTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:statusBarColor">#F9FCFD</item>
+        <item name="android:navigationBarColor">#F9FCFD</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:colorAccent">#22C993</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>
