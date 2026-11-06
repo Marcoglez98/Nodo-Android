@@ -14,7 +14,7 @@ import java.util.List;
 
 /** Grant-only provider for files created by NODO; no access to arbitrary app paths. */
 public final class NodeFileProvider extends ContentProvider {
-    public static Uri uri(String folder,String name){return new Uri.Builder().scheme("content").authority("com.nodo.messenger.files").appendPath(folder).appendPath(name).build();}
+    public static Uri uri(String folder,String name){return new Uri.Builder().scheme("content").authority("com.nodo.messenger.beta.files").appendPath(folder).appendPath(name).build();}
     private File file(Uri u)throws FileNotFoundException {
         List<String> p=u.getPathSegments();
         if(p.size()!=2 || !(p.get(0).equals("received")||p.get(0).equals("sent")||p.get(0).equals("voice")))throw new FileNotFoundException("Ruta no permitida");

@@ -1,0 +1,63 @@
+name: NODO Beta - compilar APK firmado o preparar firma
+on:
+  push:
+    branches: [nodo-beta]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  beta:
+    runs-on: ubuntu-latest
+    env:
+      NODO_KEY_B64: ${{ secrets.NODO_KEYSTORE_B64 }}
+      NODO_KEY_PASS: ${{ secrets.NODO_KEYSTORE_PASSWORD }}
+    steps:
+      - name: Obtener proyecto
+        uses: actions/checkout@v4
+      - name: Preparar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Instalar Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager -print -quit)"
+          test -n "$SDKMANAGER"
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install "platforms;android-35" "build-tools;35.0.0"
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Preparar clave privada desde secretos si existe
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "$NODO_KEY_B64" ] && [ -n "$NODO_KEY_PASS" ]; then
+            printf '%s' "$NODO_KEY_B64" | base64 --decode > "$GITHUB_WORKSPACE/nodo-signing.p12"
+            echo "NODO_SIGNING_FILE=$GITHUB_WORKSPACE/nodo-signing.p12" >> "$GITHUB_ENV"
+            echo "NODO_SIGNING_PASSWORD=$NODO_KEY_PASS" >> "$GITHUB_ENV"
+            echo "Se utilizará firma estable desde secretos"
+          else
+            echo "Sin secretos: se compilará APK sin firmar, únicamente para firma externa"
+          fi
+      - name: Compilar NODO Beta
+        run: gradle :app:assembleRelease --stacktrace --no-daemon
+      - name: Preparar entrega
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p entrega
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk entrega/NODO-Beta-v0.4.1.apk
+          else
+            cp app/build/outputs/apk/release/app-release-unsigned.apk entrega/NODO-Beta-sin-firmar.apk
+            cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" entrega/apksigner.jar
+          fi
+      - name: Publicar artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: NODO-Beta-v0.4.1
+          path: entrega/
+          if-no-files-found: error
