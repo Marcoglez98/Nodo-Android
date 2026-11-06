@@ -16,12 +16,14 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Instalar paquetes Android 35
+      - name: Preparar paquetes Android
         shell: bash
         run: |
-          set -e
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
+          set -euo pipefail
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager -print -quit)"
+          if [ -z "$SDKMANAGER" ]; then echo 'No se encontro sdkmanager'; exit 1; fi
+          echo "Usando $SDKMANAGER"
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install "platforms;android-35" "build-tools;35.0.0"
       - name: Configurar Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
         with:
