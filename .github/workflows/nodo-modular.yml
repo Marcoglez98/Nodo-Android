@@ -1,4 +1,4 @@
-name: NODO Beta 0.9 - compilar arquitectura modular
+name: NODO Beta 0.9.1 - compilar arquitectura modular
 on:
   push:
     branches: [nodo-modular-v06]
@@ -32,6 +32,6 @@ jobs:
       - name: Subir APK sin firmar
         uses: actions/upload-artifact@v4
         with:
-          name: NODO-Beta-0.9-unsigned
+          name: NODO-Beta-0.9.1-unsigned
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error

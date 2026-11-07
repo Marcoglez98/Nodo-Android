@@ -71,6 +71,8 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     private final Handler handler=new Handler(Looper.getMainLooper());
     private String screen="discover",currentPeer="",callPeer="",networkStatus="Iniciando red local…",micAction="";
     private boolean recording=false,recordingPaused=false,muted=false,loud=false,foreground=false,callDialogOpen=false;
+    private boolean customHotspotPermissionPending=false;
+    private String pendingHotspotSsid="",pendingHotspotPassword="";
     private long recordingStart=0L,recordedMs=0L;
     private TextView callTimerLabel,callStatusLabel;
     private Runnable callTimer;
@@ -412,39 +414,100 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         }),lp(-1,48));
         gap(body,12);body.addView(txt("Reconexión automática con contactos autorizados. Para recibir mensajes al cerrar la pantalla, activa Segundo plano en Ajustes.",12,MUTED,false));
     }
+    private void requestHotspot(boolean custom,String ssid,String password){
+        if(nodoService==null){toast("Preparando servicio NODO…");return;}
+        if(nodoService.hotspotActive()||nodoService.hotspotStarting()){
+            toast("Apaga la zona NODO antes de cambiar el nombre o la clave");return;
+        }
+        customHotspotPermissionPending=custom;
+        pendingHotspotSsid=ssid;pendingHotspotPassword=password;
+        String permission=Build.VERSION.SDK_INT>=33?Manifest.permission.NEARBY_WIFI_DEVICES:Manifest.permission.ACCESS_FINE_LOCATION;
+        if(checkSelfPermission(permission)!=PackageManager.PERMISSION_GRANTED){
+            requestPermissions(new String[]{permission},REQUEST_HOTSPOT);
+        }else startRequestedHotspot();
+    }
+    private void startRequestedHotspot(){
+        if(nodoService==null)return;
+        NodoService.start(this);
+        if(customHotspotPermissionPending)nodoService.startOfflineHotspot(pendingHotspotSsid,pendingHotspotPassword);
+        else nodoService.startOfflineHotspot();
+        customHotspotPermissionPending=false;pendingHotspotSsid="";pendingHotspotPassword="";
+    }
+    private void openHotspotSettings(){
+        try{startActivity(new Intent("android.settings.TETHER_SETTINGS"));}
+        catch(Exception e){
+            try{startActivity(new Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS));}
+            catch(Exception e2){toast("Abre Ajustes → Conexiones → Zona Wi-Fi / Punto de acceso");}
+        }
+    }
     private void showOfflineHotspotDialog(){
         if(nodoService==null){toast("Preparando el servicio NODO…");return;}
         LinearLayout content=v();pad(content,20,8,20,8);
         TextView state=txt("",14,DARK,true),details=txt("",13,MUTED,false);
-        content.addView(state);gap(content,10);content.addView(details);gap(content,14);
-        TextView create=button("Encender zona Wi-Fi local",()->{
-            if(nodoService==null)return;
-            if(nodoService.hotspotActive()){toast("La zona ya está encendida");return;}
-            String permission=Build.VERSION.SDK_INT>=33?Manifest.permission.NEARBY_WIFI_DEVICES:Manifest.permission.ACCESS_FINE_LOCATION;
-            if(checkSelfPermission(permission)!=PackageManager.PERMISSION_GRANTED){
-                requestPermissions(new String[]{permission},REQUEST_HOTSPOT);
-            }else{NodoService.start(this);nodoService.startOfflineHotspot();}
-        });content.addView(create,lp(-1,48));gap(content,8);
-        content.addView(button("Copiar nombre, clave y servidor",()->{
-            if(nodoService==null||!nodoService.hotspotActive()){toast("Primero enciende la zona");return;}
+        content.addView(state);gap(content,8);content.addView(details);gap(content,15);
+        content.addView(txt("Personalizar mi zona Wi-Fi",16,DARK,true));gap(content,5);
+        content.addView(txt("Nombre de la red",13,MUTED,false));
+        EditText ssid=new EditText(this);ssid.setSingleLine(true);ssid.setText(NodeHotspotConfig.savedName(this));
+        ssid.setHint("Ej. NODO-FAMILIA");ssid.setInputType(InputType.TYPE_CLASS_TEXT);
+        content.addView(ssid,lp(-1,50));gap(content,9);
+        content.addView(txt("Contraseña de la red (8–63 caracteres)",13,MUTED,false));
+        EditText pass=new EditText(this);pass.setSingleLine(true);
+        pass.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        pass.setText(NodeHotspotConfig.savedPassword(this));pass.setHint("Escribe tu contraseña");
+        content.addView(pass,lp(-1,50));
+        TextView reveal=txt("Mostrar contraseña",13,GREEN,true);
+        reveal.setOnClickListener(w->{
+            boolean visible=(pass.getInputType()&InputType.TYPE_MASK_VARIATION)==InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD;
+            pass.setInputType(InputType.TYPE_CLASS_TEXT|(visible?InputType.TYPE_TEXT_VARIATION_PASSWORD:InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD));
+            reveal.setText(visible?"Mostrar contraseña":"Ocultar contraseña");
+            pass.setSelection(pass.length());
+        });content.addView(reveal);gap(content,9);
+        content.addView(button("Guardar nombre y contraseña",()->{
+            String name=ssid.getText().toString().trim(),key=pass.getText().toString();
+            String error=NodeHotspotConfig.validationError(name,key);
+            if(error!=null){toast(error);return;}
+            if(!NodeHotspotConfig.save(this,name,key)){toast("No se pudo guardar la contraseña de forma segura");return;}
+            toast("Datos guardados en este teléfono");
+        }),lp(-1,46));gap(content,9);
+        content.addView(button("Crear red con mi nombre y contraseña",()->{
+            String name=ssid.getText().toString().trim(),key=pass.getText().toString();
+            String error=NodeHotspotConfig.validationError(name,key);
+            if(error!=null){toast(error);return;}
+            if(!NodeHotspotConfig.save(this,name,key)){toast("No se pudo guardar la contraseña de forma segura");return;}
+            if(Build.VERSION.SDK_INT>=36){requestHotspot(true,name,key);return;}
+            new AlertDialog.Builder(this).setTitle("Configuración desde Android")
+                .setMessage("En esta versión de Android, una app normal no puede elegir el nombre y la clave de su zona Wi-Fi local. Guardé tus preferencias. Abre los ajustes de Punto de acceso de tu teléfono y escribe allí estos datos. Una vez creada la red, NODO funcionará en ella sin internet si Android permite el punto de acceso sin datos móviles.")
+                .setPositiveButton("Abrir ajustes",(d,w)->openHotspotSettings())
+                .setNegativeButton("Cancelar",null).show();
+        }),lp(-1,48));gap(content,8);
+        content.addView(txt(Build.VERSION.SDK_INT>=36?
+            "Android intentará crear la red local con estos datos. Si el fabricante no lo permite, usa Ajustes o la red automática.":
+            "En este Android, NODO no puede aplicar el nombre y la contraseña a la zona local automática. Puedes configurarlos en Ajustes del punto de acceso o usar la red automática sin internet.",12,MUTED,false));gap(content,13);
+        content.addView(button("Crear zona local automática sin internet",()->requestHotspot(false,"","")),lp(-1,46));gap(content,8);
+        content.addView(button("Abrir ajustes del punto de acceso",this::openHotspotSettings),lp(-1,46));gap(content,8);
+        content.addView(button("Copiar datos de la red ACTIVA",()->{
+            if(nodoService==null||!nodoService.hotspotActive()){
+                toast("En una zona del sistema, confirma primero nombre y clave en Ajustes");return;
+            }
             String data="Red Wi-Fi: "+nodoService.hotspotSsid()+"\nClave: "+nodoService.hotspotPassword()
                 +"\nServidor local NODO: "+nodoService.hotspotAddress()+":"+nodoService.hotspotPort();
             android.content.ClipboardManager clipboard=(android.content.ClipboardManager)getSystemService(Context.CLIPBOARD_SERVICE);
-            clipboard.setPrimaryClip(ClipData.newPlainText("Zona NODO",data));toast("Datos copiados");
+            clipboard.setPrimaryClip(ClipData.newPlainText("Zona NODO",data));toast("Datos reales de la red copiados");
         }),lp(-1,46));gap(content,8);
-        content.addView(button("Apagar zona NODO",()->{if(nodoService!=null)nodoService.stopOfflineHotspot();}),lp(-1,46));gap(content,8);
-        content.addView(txt("En los otros teléfonos: entra a Ajustes de Wi-Fi, selecciona esta red y usa la clave. Si Android avisa 'sin internet', elige mantener conexión. Abre NODO y entra en Descubrir. Si no aparecen, utiliza 'Unirse mediante IP'. La zona sigue activa mientras el servicio NODO funcione.",12,MUTED,false));
-        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Crear zona NODO sin internet")
-            .setView(content).setPositiveButton("Cerrar",null).create();
+        content.addView(button("Apagar zona NODO automática",()->{if(nodoService!=null)nodoService.stopOfflineHotspot();}),lp(-1,46));gap(content,8);
+        content.addView(txt("Los demás teléfonos se conectan desde Ajustes → Wi-Fi a la red activa. Si aparece 'Sin internet', elige mantener conexión. Después abre NODO para descubrir y enlazar contactos. Si la búsqueda falla, usa Unirse mediante dirección IP.",12,MUTED,false));
+        ScrollView scroller=new ScrollView(this);scroller.setFillViewport(false);scroller.addView(content);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Zona NODO · Red personalizable")
+            .setView(scroller).setPositiveButton("Cerrar",null).create();
         Runnable update=new Runnable(){public void run(){
             if(!dialog.isShowing()||nodoService==null)return;
             state.setText(nodoService.hotspotMessage());
-            if(nodoService.hotspotActive())details.setText("Red: "+nodoService.hotspotSsid()
+            if(nodoService.hotspotActive())details.setText("RED ACTIVA (datos reales):\nNombre: "+nodoService.hotspotSsid()
                 +"\nContraseña: "+nodoService.hotspotPassword()
                 +"\nIP del servidor: "+nodoService.hotspotAddress()
                 +"\nPuerto: "+nodoService.hotspotPort());
-            else details.setText("La red aún no está encendida.");
-            handler.postDelayed(this,900);
+            else details.setText("Zona local automática apagada. Si usas el punto de acceso del sistema, revisa en Ajustes su nombre y contraseña.");
+            handler.postDelayed(this,1000);
         }};
         dialog.setOnDismissListener(d->handler.removeCallbacks(update));dialog.show();handler.post(update);
     }
@@ -1019,7 +1082,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         super.onRequestPermissionsResult(req,perms,results);
         if(req==REQUEST_HOTSPOT){
             if(results.length>0&&results[0]==PackageManager.PERMISSION_GRANTED && nodoService!=null){
-                NodoService.start(this);nodoService.startOfflineHotspot();
+                startRequestedHotspot();
             }else toast("Se necesita permiso de Wi-Fi para crear la zona local");
         }
         if(req==REQUEST_MIC){if(results.length>0&&results[0]==PackageManager.PERMISSION_GRANTED)runMicAction();

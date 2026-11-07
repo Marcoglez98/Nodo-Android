@@ -1,33 +1,20 @@
-# NODO Beta 0.9.0 — Sesiones recuperables y grupos con invitación
+# NODO Beta 0.9.1 — Zona Wi-Fi personalizable
 
-# NODO Beta 0.8 — Zona Wi-Fi sin internet
+Se ha añadido a **Descubrir → Crear zona Wi-Fi sin internet** un formulario para elegir y guardar el **nombre (SSID)** y **contraseña (WPA2)** que deseas usar.
 
-NODO puede crear una **zona Wi-Fi local** desde el teléfono Android servidor, sin router y sin datos de internet. Utiliza `WifiManager.startLocalOnlyHotspot` (Android 8+). Otros Android pueden unirse con el nombre y clave que muestra la aplicación.
+- El nombre admite hasta **32 bytes UTF-8**; la contraseña debe contener **8–63 caracteres ASCII imprimibles**.
+- El nombre y la clave se guardan **solo en el teléfono**. La contraseña se cifra usando Android Keystore (AES-GCM) en lugar de almacenarse en texto plano.
+- En **Android 16+ (API 36)**, NODO *intenta* solicitar la zona local con esa configuración utilizando `WifiManager.startLocalOnlyHotspotWithConfiguration`. Es posible que algunos fabricantes no permitan esa opción; se muestra un mensaje y se ofrece el método alternativo.
+- En **Android 8–15**, la API pública `startLocalOnlyHotspot` asigna automáticamente SSID y contraseña; las aplicaciones normales **no pueden elegirlas**. En este caso, el botón de personalización abre **Ajustes → Punto de acceso** para introducir los mismos datos en el punto de acceso del sistema. El sistema puede requerir datos móviles para habilitarlo, según el fabricante.
+- Sigue disponible **Crear zona local automática sin internet**. Esta opción solicita una red sin internet con el nombre y clave elegidos por Android. El cuadro de estado siempre muestra los **datos reales** de la red activa, no los nombres guardados.
+- No se cambia el protocolo LAN existente: los clientes pueden unirse mediante descubrimiento o IP manual. No se implementa Bluetooth ni Wi-Fi Direct.
 
-Funciones implementadas:
-- Descubrir > Crear zona Wi-Fi sin internet (requiere permiso Wi-Fi cercanos en Android 13+ o ubicación anterior).
-- La reserva del hotspot vive en `NodoService` para que siga activa en segundo plano, siempre que Android mantenga el servicio.
-- NODO muestra SSID, clave, IP local (cuando el sistema la publica) y puerto TCP; permite copiar datos y cerrar la zona.
-- Los clientes pueden unirse desde Wi-Fi del sistema y abrir NODO; mDNS intenta descubrir NODO automáticamente. Si el descubrimiento no funciona en el hotspot, en Descubrir > Unirse mediante dirección IP pueden escribir el IP y puerto.
-- Las direcciones manuales se guardan en el teléfono cliente para reintentos futuros mientras sigan siendo válidas.
-- Se mantiene el permiso del primer enlace, mensajes, archivos, llamadas y chats grupales ya existentes.
+Para actualizar sobre NODO Beta 0.9, el APK debe estar firmado con el **mismo certificado**; la compilación de GitHub puede ser sin firma y debe firmarse fuera del repositorio. El archivo de claves **no debe subirse** al repositorio público.
 
-## Límites y seguridad
-- **No ofrece acceso a internet**, y es distinta del punto de acceso convencional para compartir datos del teléfono. El nombre/contraseña asignados son los que entrega Android; no deben inventarse.
-- Algunos fabricantes bloquean `LocalOnlyHotspot` o no admiten modo concurrente con tethering habitual; se muestra el error, no se simula.
-- La detección automática mDNS puede fallar si Android filtra multicast o el punto de acceso aísla los clientes; se incluye unión por IP como respaldo, pero el aislamiento entre clientes sigue dependiendo del sistema.
-- Los teléfonos invitados deben aceptar permanecer en una Wi-Fi sin internet si Android lo pregunta.
-- La llamada y el chat exigen que los teléfonos mantengan alcance Wi-Fi y la app/servicio activo. Android puede detener servicios por batería. No es Wi-Fi Direct y no usa Bluetooth como transporte.
-- La comunicación aún no cifra los mensajes de extremo a extremo; usar datos de prueba.
-- El certificado de NODO Beta debe ser **el mismo** que la versión 0.7 para permitir actualización. No se publica el keystore.
+## Prueba
+1. Instala Beta 0.9.1 sobre la 0.9 y abre **Descubrir → Crear zona Wi-Fi sin internet**.
+2. Escribe un nombre y contraseña, pulsa **Guardar**.
+3. Prueba **Crear red con mi nombre y contraseña**. Si Android no lo admite, configura el punto de acceso mediante **Abrir ajustes**; o elige **Red automática** para una red local sin internet.
+4. Conecta otros móviles y comprueba el chat/llamadas por Wi-Fi local.
 
-## Pruebas recomendadas
-1. Instalar Beta 0.8 en 2–3 teléfonos.
-2. En teléfono anfitrión: Descubrir > Crear zona Wi-Fi sin internet, autorizar permiso, confirmar nombre y clave.
-3. En invitados: conectar desde Ajustes Wi-Fi a la red creada, aceptando el mensaje sin internet.
-4. Abrir NODO en todos, autorizar nuevos contactos y enviar mensajes.
-5. Si no aparecen: conectar manualmente por IP y puerto mostrados en servidor.
-6. Bloquear pantallas y comprobar recepción, luego probar llamada de voz.
-
-
-**Nueva versión**: llamadas individuales y grupales sin finalizar automáticamente al perder Wi-Fi; reanudación de sesión al recuperar la conexión y mientras el servicio siga activo; solicitudes explícitas para pertenecer a un grupo; participantes aceptados únicamente. El contador permanece activo durante la reconexión. Pruebas reales imprescindibles.
+**Sin pruebas físicas completas:** la compatibilidad del hotspot depende de Android y el fabricante, y un punto de acceso del sistema puede actuar distinto de la red local automática.

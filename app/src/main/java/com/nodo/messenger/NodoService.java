@@ -7,6 +7,8 @@ import android.content.pm.ServiceInfo;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.SoftApConfiguration;
+import android.net.wifi.WifiSsid;
+import java.nio.charset.StandardCharsets;
 import android.os.*;
 import java.util.*;
 import java.util.function.Consumer;
@@ -107,42 +109,83 @@ public final class NodoService extends Service implements LocalNode.Listener {
         LocalNode.Listener l=uiListener;
         if(l!=null)main.post(()->{if(uiListener==l){l.status(status);l.changed();}});
     }
-    /** Android's local-only hotspot provides a password-protected Wi-Fi LAN without internet. */
-    void startOfflineHotspot(){
-        if(hotspotReservation!=null||hotspotStarting){hotspotChanged("La zona NODO ya está activa o iniciándose");return;}
+    /**
+     * A LocalOnlyHotspot never gives internet access. Android 16+ (API 36) exposes an
+     * optional configured variant. Older versions must use an automatically chosen
+     * SSID/password or the user's own tethering controls in system Settings.
+     */
+    void startOfflineHotspot(){startOfflineHotspot(null,null);}
+    void startOfflineHotspot(String requestedSsid,String requestedPassword){
+        boolean custom=requestedSsid!=null && requestedPassword!=null;
+        if(hotspotReservation!=null||hotspotStarting){hotspotChanged("La zona NODO ya está activa o iniciándose. Apágala antes de cambiar la red.");return;}
+        if(custom){
+            String error=NodeHotspotConfig.validationError(requestedSsid,requestedPassword);
+            if(error!=null){hotspotChanged(error);return;}
+            if(Build.VERSION.SDK_INT<36){
+                hotspotChanged("Esta versión de Android asigna el nombre y la clave automáticamente. Usa los ajustes del punto de acceso para poner los tuyos.");
+                return;
+            }
+        }
         WifiManager wifi=(WifiManager)getApplicationContext().getSystemService(Context.WIFI_SERVICE);
         if(wifi==null){hotspotChanged("Este teléfono no ofrece Wi-Fi compatible");return;}
-        hotspotStarting=true;hotspotChanged("Creando zona Wi-Fi local…");
+        hotspotStarting=true;
+        hotspotChanged(custom?"Creando zona con el nombre elegido…":"Creando zona Wi-Fi local automática…");
+        final boolean customAttempt=custom;
+        WifiManager.LocalOnlyHotspotCallback callback=new WifiManager.LocalOnlyHotspotCallback(){
+            @Override public void onStarted(WifiManager.LocalOnlyHotspotReservation reservation){
+                hotspotReservation=reservation;hotspotStarting=false;
+                try{
+                    if(Build.VERSION.SDK_INT>=30){
+                        SoftApConfiguration cfg=reservation.getSoftApConfiguration();
+                        hotspotSsid=cfg==null?"":cfg.getSsid();
+                        hotspotPassword=cfg==null?"":cfg.getPassphrase();
+                    }else{
+                        WifiConfiguration cfg=reservation.getWifiConfiguration();
+                        hotspotSsid=cfg==null?"":cfg.SSID;
+                        hotspotPassword=cfg==null?"":cfg.preSharedKey;
+                        if(hotspotSsid!=null)hotspotSsid=hotspotSsid.replace("\"", "");
+                        if(hotspotPassword!=null)hotspotPassword=hotspotPassword.replace("\"", "");
+                    }
+                }catch(Exception ex){hotspotMessage="Zona encendida; revisa las credenciales";}
+                hotspotChanged(customAttempt && (!requestedSsid.equals(hotspotSsid) || !requestedPassword.equals(hotspotPassword))?
+                    "Android creó la zona con datos diferentes a los solicitados. Usa el nombre y contraseña REALES que se muestran arriba.":
+                    "Zona Wi-Fi sin internet lista · otros teléfonos pueden unirse");
+            }
+            @Override public void onStopped(){
+                hotspotReservation=null;hotspotStarting=false;hotspotSsid="";hotspotPassword="";
+                hotspotChanged("Zona Wi-Fi local detenida");
+            }
+            @Override public void onFailed(int reason){
+                hotspotReservation=null;hotspotStarting=false;hotspotSsid="";hotspotPassword="";
+                hotspotChanged(customAttempt?
+                    "Android rechazó la configuración personalizada ("+reason+"). Prueba Ajustes de zona Wi-Fi o red automática.":
+                    "No se pudo crear la zona ("+reason+"). Apaga otros puntos de acceso y reintenta.");
+            }
+        };
         try{
-            wifi.startLocalOnlyHotspot(new WifiManager.LocalOnlyHotspotCallback(){
-                @Override public void onStarted(WifiManager.LocalOnlyHotspotReservation reservation){
-                    hotspotReservation=reservation;hotspotStarting=false;
-                    try{
-                        if(Build.VERSION.SDK_INT>=30){
-                            SoftApConfiguration cfg=reservation.getSoftApConfiguration();
-                            hotspotSsid=cfg==null?"":cfg.getSsid();
-                            hotspotPassword=cfg==null?"":cfg.getPassphrase();
-                        } else {
-                            WifiConfiguration cfg=reservation.getWifiConfiguration();
-                            hotspotSsid=cfg==null?"":cfg.SSID;
-                            hotspotPassword=cfg==null?"":cfg.preSharedKey;
-                            if(hotspotSsid!=null)hotspotSsid=hotspotSsid.replace("\"","");
-                            if(hotspotPassword!=null)hotspotPassword=hotspotPassword.replace("\"","");
-                        }
-                    }catch(Exception ex){hotspotMessage="Zona encendida; revisa las credenciales";}
-                    hotspotChanged("Zona Wi-Fi sin internet lista · otros teléfonos pueden unirse");
-                }
-                @Override public void onStopped(){
-                    hotspotReservation=null;hotspotStarting=false;hotspotSsid="";hotspotPassword="";
-                    hotspotChanged("Zona Wi-Fi local detenida");
-                }
-                @Override public void onFailed(int reason){
-                    hotspotReservation=null;hotspotStarting=false;hotspotSsid="";hotspotPassword="";
-                    hotspotChanged("No se pudo crear la zona ("+reason+"). Apaga otros puntos de acceso y reintenta.");
-                }
-            },main);
-        }catch(SecurityException denied){hotspotStarting=false;hotspotChanged("Concede el permiso de dispositivos Wi-Fi cercanos");}
-         catch(Exception ex){hotspotStarting=false;hotspotChanged("Zona Wi-Fi no disponible: "+ex.getMessage());}
+            if(custom){
+                // Use reflection so compileSdk 35 builds and older Android versions remain compatible.
+                // This method and public SoftApConfiguration.Builder were introduced in API 36.
+                Class<?> type=Class.forName("android.net.wifi.SoftApConfiguration$Builder");
+                Object builder=type.getConstructor().newInstance();
+                WifiSsid ssid=WifiSsid.fromBytes(requestedSsid.getBytes(StandardCharsets.UTF_8));
+                type.getMethod("setWifiSsid",WifiSsid.class).invoke(builder,ssid);
+                type.getMethod("setPassphrase",String.class,int.class)
+                    .invoke(builder,requestedPassword,SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
+                SoftApConfiguration config=(SoftApConfiguration)type.getMethod("build").invoke(builder);
+                WifiManager.class.getMethod("startLocalOnlyHotspotWithConfiguration",
+                    SoftApConfiguration.class,java.util.concurrent.Executor.class,
+                    WifiManager.LocalOnlyHotspotCallback.class)
+                    .invoke(wifi,config,getMainExecutor(),callback);
+            }else wifi.startLocalOnlyHotspot(callback,main);
+        }catch(SecurityException denied){
+            hotspotStarting=false;hotspotChanged("Concede el permiso de dispositivos Wi-Fi cercanos");
+        }catch(Exception ex){
+            hotspotStarting=false;
+            hotspotChanged(custom?
+                "El teléfono no admite crear la red con un nombre personalizado desde NODO. Usa Ajustes de punto de acceso, o la red automática.":
+                "Zona Wi-Fi no disponible: "+ex.getClass().getSimpleName());
+        }
     }
     void stopOfflineHotspot(){
         WifiManager.LocalOnlyHotspotReservation r=hotspotReservation;
