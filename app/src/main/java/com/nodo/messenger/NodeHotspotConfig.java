@@ -27,7 +27,7 @@ final class NodeHotspotConfig {
             byte[] iv=Base64.decode(pieces[0],Base64.NO_WRAP);
             byte[] ciphertext=Base64.decode(pieces[1],Base64.NO_WRAP);
             Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");
-            cipher.init(Cipher.DECRYPT,fetchKey(),new GCMParameterSpec(128,iv));
+            cipher.init(Cipher.DECRYPT_MODE,fetchKey(),new GCMParameterSpec(128,iv));
             return new String(cipher.doFinal(ciphertext),StandardCharsets.UTF_8);
         }catch(Exception ignored){return "";}
     }
@@ -45,7 +45,7 @@ final class NodeHotspotConfig {
         try{
             byte[] bytes=password.getBytes(StandardCharsets.UTF_8);
             Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");
-            cipher.init(Cipher.ENCRYPT,fetchKey());
+            cipher.init(Cipher.ENCRYPT_MODE,fetchKey());
             String encrypted=Base64.encodeToString(cipher.getIV(),Base64.NO_WRAP)+":"+
                 Base64.encodeToString(cipher.doFinal(bytes),Base64.NO_WRAP);
             return prefs(ctx).edit().putString("ssid",name).putString("encrypted_password",encrypted).commit();
