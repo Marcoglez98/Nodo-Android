@@ -1,25 +1,28 @@
-# NODO Beta 0.7: actualizaciones integradas
+# NODO Beta 0.8 — Zona Wi-Fi sin internet
 
-NODO Beta permite revisar nuevas versiones desde **Ajustes → Actualizaciones** y desde avisos de Android. La comprobación necesita internet; los mensajes por LAN siguen funcionando sin internet.
+NODO puede crear una **zona Wi-Fi local** desde el teléfono Android servidor, sin router y sin datos de internet. Utiliza `WifiManager.startLocalOnlyHotspot` (Android 8+). Otros Android pueden unirse con el nombre y clave que muestra la aplicación.
 
-## Flujo de actualizaciones
-1. A partir de NODO Beta **0.7**, la aplicación consulta periódicamente `updates/beta.json` publicado en este repositorio.
-2. Si `versionCode` es superior al instalado, ofrece **Descargar** y muestra notas de versión.
-3. La app descarga el APK por HTTPS a su almacenamiento interno, comprueba SHA-256, ID de paquete y versión, y solicita confirmación para instalar con el instalador de Android.
-4. Android exige autorización de instalación desde esta fuente cuando corresponde; no hay instalación silenciosa.
-5. La firma del APK debe coincidir con la instalación anterior. La clave de firma privada NO debe aparecer en GitHub público.
+Funciones implementadas:
+- Descubrir > Crear zona Wi-Fi sin internet (requiere permiso Wi-Fi cercanos en Android 13+ o ubicación anterior).
+- La reserva del hotspot vive en `NodoService` para que siga activa en segundo plano, siempre que Android mantenga el servicio.
+- NODO muestra SSID, clave, IP local (cuando el sistema la publica) y puerto TCP; permite copiar datos y cerrar la zona.
+- Los clientes pueden unirse desde Wi-Fi del sistema y abrir NODO; mDNS intenta descubrir NODO automáticamente. Si el descubrimiento no funciona en el hotspot, en Descubrir > Unirse mediante dirección IP pueden escribir el IP y puerto.
+- Las direcciones manuales se guardan en el teléfono cliente para reintentos futuros mientras sigan siendo válidas.
+- Se mantiene el permiso del primer enlace, mensajes, archivos, llamadas y chats grupales ya existentes.
 
-## Publicar una nueva versión para todos los teléfonos
-- Cambiar versionCode/versionName en `app/build.gradle`.
-- Subir y probar el código.
-- Configurar secretos privados `NODO_KEYSTORE_B64` y `NODO_KEYSTORE_PASSWORD` en **Settings > Secrets and variables > Actions**.
-- Ejecutar Actions: **NODO Beta 0.7 - compilación y publicación de actualizaciones** > **Run workflow**, marcar **publicar=true**.
-- El workflow sube el APK firmado y actualiza el manifiesto `updates/beta.json`. Los dispositivos detectan el nuevo número de versión. La publicación sin secretos se bloquea para impedir APK inválidos.
+## Límites y seguridad
+- **No ofrece acceso a internet**, y es distinta del punto de acceso convencional para compartir datos del teléfono. El nombre/contraseña asignados son los que entrega Android; no deben inventarse.
+- Algunos fabricantes bloquean `LocalOnlyHotspot` o no admiten modo concurrente con tethering habitual; se muestra el error, no se simula.
+- La detección automática mDNS puede fallar si Android filtra multicast o el punto de acceso aísla los clientes; se incluye unión por IP como respaldo, pero el aislamiento entre clientes sigue dependiendo del sistema.
+- Los teléfonos invitados deben aceptar permanecer en una Wi-Fi sin internet si Android lo pregunta.
+- La llamada y el chat exigen que los teléfonos mantengan alcance Wi-Fi y la app/servicio activo. Android puede detener servicios por batería. No es Wi-Fi Direct y no usa Bluetooth como transporte.
+- La comunicación aún no cifra los mensajes de extremo a extremo; usar datos de prueba.
+- El certificado de NODO Beta debe ser **el mismo** que la versión 0.7 para permitir actualización. No se publica el keystore.
 
-**Los secretos no están configurados por el asistente.** En ausencia de ellos puede compilarse un APK sin firmar para desarrollo, pero nunca se distribuye como actualización.
-
-El manifiesto inicial apunta a la versión 0.6 firmada existente. Para NODO 0.7, publicar el APK firmado y actualizar el manifiesto de forma conjunta.
-
-La comprobación periódica utiliza JobScheduler (~12 horas según planificación de Android) y notificaciones; no se puede garantizar una hora exacta por restricciones de batería o falta de internet. No se admiten actualizaciones desde versiones antiguas firmadas con certificados distintos. La Beta mantiene `com.nodo.messenger.beta`.
-
-Funcionalidades de NODO: Wi-Fi LAN, chats, notas de voz, archivos, llamadas y grupos experimentales. Bluetooth, Wi-Fi Direct y videollamadas siguen pendientes.
+## Pruebas recomendadas
+1. Instalar Beta 0.8 en 2–3 teléfonos.
+2. En teléfono anfitrión: Descubrir > Crear zona Wi-Fi sin internet, autorizar permiso, confirmar nombre y clave.
+3. En invitados: conectar desde Ajustes Wi-Fi a la red creada, aceptando el mensaje sin internet.
+4. Abrir NODO en todos, autorizar nuevos contactos y enviar mensajes.
+5. Si no aparecen: conectar manualmente por IP y puerto mostrados en servidor.
+6. Bloquear pantallas y comprobar recepción, luego probar llamada de voz.

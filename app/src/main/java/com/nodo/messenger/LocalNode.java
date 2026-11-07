@@ -65,13 +65,54 @@ public final class LocalNode {
     private final Set<String> groupCallMembers=ConcurrentHashMap.newKeySet();
     private final Set<String> groupCallInvited=ConcurrentHashMap.newKeySet();
     private WifiManager.WifiLock wifiLock;
-    private volatile long lastReconnect=0;
+    private volatile long lastReconnect=0,lastManualRetry=0;
 
     public LocalNode(Context c,Store s,Listener l){ctx=c.getApplicationContext();store=s;listener=l;}
     public boolean isConnected(String id){ Connection c=sockets.get(id);return c!=null&&!c.socket.isClosed(); }
     public boolean supportsAck(String id){Connection c=sockets.get(id);return c!=null && c.modern;}
     public List<Discovered> nearby(){return new ArrayList<>(nearby.values());}
     public int connections(){return sockets.size();}
+    /** A manually provided hotspot/server address. Saved for reconnection when NSD is blocked. */
+    public void connectLocalAddress(String host,int port){
+        if(host==null || !host.matches("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}") || port<1 || port>65535){
+            listener.status("Dirección de servidor no válida");return;
+        }
+        try{
+            InetAddress address=InetAddress.getByName(host);
+            if(!(address instanceof Inet4Address) || (!address.isSiteLocalAddress() && !address.isLinkLocalAddress())){
+                listener.status("Utiliza una dirección IP privada del punto de acceso");return;
+            }
+        }catch(Exception e){listener.status("Dirección no válida");return;}
+        String key=host+":"+port;
+        android.content.SharedPreferences prefs=ctx.getSharedPreferences("nodo_local_endpoints",Context.MODE_PRIVATE);
+        Set<String> saved=new java.util.HashSet<>(prefs.getStringSet("addresses",java.util.Collections.emptySet()));
+        if(saved.size()>=4&&!saved.contains(key))saved.clear();
+        saved.add(key);prefs.edit().putStringSet("addresses",saved).apply();
+        connect(new Discovered("MANUAL-"+key,host,port));
+    }
+    /** Listening on all local interfaces: regular WLAN or an Android local-only hotspot. */
+    public int listeningPort(){return server==null?0:server.getLocalPort();}
+    public static String localHotspotIpv4(){
+        try{
+            List<String> preferred=new ArrayList<>(),other=new ArrayList<>();
+            Enumeration<NetworkInterface> interfaces=NetworkInterface.getNetworkInterfaces();
+            while(interfaces!=null&&interfaces.hasMoreElements()){
+                NetworkInterface net=interfaces.nextElement();
+                if(!net.isUp()||net.isLoopback()||net.isVirtual())continue;
+                String name=net.getName().toLowerCase(Locale.ROOT);
+                if(name.startsWith("tun")||name.startsWith("rmnet")||name.startsWith("ccmni"))continue;
+                Enumeration<InetAddress> ips=net.getInetAddresses();
+                while(ips.hasMoreElements()){
+                    InetAddress a=ips.nextElement();
+                    if(a instanceof Inet4Address && a.isSiteLocalAddress()){
+                        if(name.contains("ap")||name.contains("wlan")||name.contains("swlan")||name.contains("wifi")) preferred.add(a.getHostAddress());
+                        else other.add(a.getHostAddress());
+                    }
+                }
+            }
+            preferred.addAll(other);return String.join(" / ",preferred);
+        }catch(Exception ex){return "";}
+    }
     public boolean isCalling(){return !activeCall.isEmpty();}
     public boolean groupCallActive(){return groupCall;}
     public String activeGroupId(){return currentGroup;}
@@ -80,7 +121,8 @@ public final class LocalNode {
     public synchronized void start(){
         if(running)return;running=true;
         try{
-            server=new ServerSocket(0);server.setReuseAddress(true);
+            try{server=new ServerSocket(48617);}catch(BindException inUse){server=new ServerSocket(0);}
+            server.setReuseAddress(true);
             nsd=(NsdManager)ctx.getSystemService(Context.NSD_SERVICE);
             WifiManager wifi=(WifiManager)ctx.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
             if(wifi!=null){
@@ -128,6 +170,22 @@ public final class LocalNode {
                 for(Connection cn:sockets.values()){
                     if(now-cn.lastRx>45000){try{cn.socket.close();}catch(Exception ignored){}}
                     else send(cn.peer.id,"ping","");
+                }
+                // Manual local-IP fallback for hotspot devices whose mDNS discovery is filtered.
+                if(now-lastManualRetry>13000){
+                    lastManualRetry=now;
+                    android.content.SharedPreferences pref=ctx.getSharedPreferences("nodo_local_endpoints",Context.MODE_PRIVATE);
+                    for(String target:pref.getStringSet("addresses",java.util.Collections.emptySet())){
+                        int cut=target.lastIndexOf(':');if(cut<1)continue;
+                        try{
+                            String host=target.substring(0,cut);int port=Integer.parseInt(target.substring(cut+1));
+                            // Never initiate another connection while the same peer's socket is alive.
+                            boolean alive=false;
+                            for(Connection c:sockets.values())if(c.socket!=null && !c.socket.isClosed()
+                                    && host.equals(c.socket.getInetAddress().getHostAddress())){alive=true;break;}
+                            if(!alive) connect(new Discovered("MANUAL-"+target,host,port));
+                        }catch(Exception ignored){}
+                    }
                 }
                 // Android NSD may not emit another onServiceFound after a socket drops.
                 // Try cached mDNS endpoints periodically; only one side initiates.

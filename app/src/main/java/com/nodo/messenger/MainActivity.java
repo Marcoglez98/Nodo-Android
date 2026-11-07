@@ -38,7 +38,7 @@ import com.nodo.messenger.transport.PlannedTransport;
 public final class MainActivity extends Activity implements LocalNode.Listener {
     private static final int GREEN=NodoTheme.EMERALD, DARK=NodoTheme.INK, MUTED=NodoTheme.SECONDARY;
     private static final int PALE=NodoTheme.MINT, BG=NodoTheme.BACKGROUND, BLUE=NodoTheme.BLUE;
-    private static final int REQUEST_DOC=41,REQUEST_PHOTO=42,REQUEST_MIC=43,REQUEST_CAMERA=44;
+    private static final int REQUEST_DOC=41,REQUEST_PHOTO=42,REQUEST_MIC=43,REQUEST_CAMERA=44,REQUEST_HOTSPOT=45;
     private Store store; private ChatRepository chats; private LocalNode node; private NodoService nodoService;
     private String chatFilter="all";
     private boolean bound=false,bindRequested=false;
@@ -368,12 +368,70 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
                 else {node.connect(p);toast("Solicitando enlace. La otra persona debe autorizarlo.");}});
             line.addView(btn);c.addView(line);body.addView(c);gap(body,9);
         }
+        // Offline-host mode: the phone itself becomes the Wi-Fi access point.
+        LinearLayout host=card();host.addView(txt("Zona NODO · Sin internet",17,DARK,true));gap(host,6);
+        host.addView(txt("Crea una red Wi-Fi desde este teléfono para que otros NODO se conecten, sin router ni datos móviles.",13,MUTED,false));gap(host,10);
+        host.addView(button("Crear zona Wi-Fi sin internet",this::showOfflineHotspotDialog),lp(-1,48));gap(host,8);
+        host.addView(button("Unirse mediante dirección IP",this::showJoinLocalDialog),lp(-1,46));
+        body.addView(host);gap(body,11);
         gap(body,10);body.addView(button("Crear enlace NODO",()->{
             new AlertDialog.Builder(this).setTitle("Tu enlace NODO")
                 .setMessage("Tu dispositivo ya está anunciándose como NODO-"+store.id().substring(0,8)+". Para enlazar, abre NODO en otro teléfono en la misma red Wi-Fi, entra en Cercanos y pulsa Enlazar. No necesitas acceso a internet.")
                 .setPositiveButton("Entendido",null).show();
         }),lp(-1,48));
         gap(body,12);body.addView(txt("Reconexión automática con contactos autorizados. Para recibir mensajes al cerrar la pantalla, activa Segundo plano en Ajustes.",12,MUTED,false));
+    }
+    private void showOfflineHotspotDialog(){
+        if(nodoService==null){toast("Preparando el servicio NODO…");return;}
+        LinearLayout content=v();pad(content,20,8,20,8);
+        TextView state=txt("",14,DARK,true),details=txt("",13,MUTED,false);
+        content.addView(state);gap(content,10);content.addView(details);gap(content,14);
+        TextView create=button("Encender zona Wi-Fi local",()->{
+            if(nodoService==null)return;
+            if(nodoService.hotspotActive()){toast("La zona ya está encendida");return;}
+            String permission=Build.VERSION.SDK_INT>=33?Manifest.permission.NEARBY_WIFI_DEVICES:Manifest.permission.ACCESS_FINE_LOCATION;
+            if(checkSelfPermission(permission)!=PackageManager.PERMISSION_GRANTED){
+                requestPermissions(new String[]{permission},REQUEST_HOTSPOT);
+            }else{NodoService.start(this);nodoService.startOfflineHotspot();}
+        });content.addView(create,lp(-1,48));gap(content,8);
+        content.addView(button("Copiar nombre, clave y servidor",()->{
+            if(nodoService==null||!nodoService.hotspotActive()){toast("Primero enciende la zona");return;}
+            String data="Red Wi-Fi: "+nodoService.hotspotSsid()+"\nClave: "+nodoService.hotspotPassword()
+                +"\nServidor local NODO: "+nodoService.hotspotAddress()+":"+nodoService.hotspotPort();
+            android.content.ClipboardManager clipboard=(android.content.ClipboardManager)getSystemService(Context.CLIPBOARD_SERVICE);
+            clipboard.setPrimaryClip(ClipData.newPlainText("Zona NODO",data));toast("Datos copiados");
+        }),lp(-1,46));gap(content,8);
+        content.addView(button("Apagar zona NODO",()->{if(nodoService!=null)nodoService.stopOfflineHotspot();}),lp(-1,46));gap(content,8);
+        content.addView(txt("En los otros teléfonos: entra a Ajustes de Wi-Fi, selecciona esta red y usa la clave. Si Android avisa 'sin internet', elige mantener conexión. Abre NODO y entra en Descubrir. Si no aparecen, utiliza 'Unirse mediante IP'. La zona sigue activa mientras el servicio NODO funcione.",12,MUTED,false));
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Crear zona NODO sin internet")
+            .setView(content).setPositiveButton("Cerrar",null).create();
+        Runnable update=new Runnable(){public void run(){
+            if(!dialog.isShowing()||nodoService==null)return;
+            state.setText(nodoService.hotspotMessage());
+            if(nodoService.hotspotActive())details.setText("Red: "+nodoService.hotspotSsid()
+                +"\nContraseña: "+nodoService.hotspotPassword()
+                +"\nIP del servidor: "+nodoService.hotspotAddress()
+                +"\nPuerto: "+nodoService.hotspotPort());
+            else details.setText("La red aún no está encendida.");
+            handler.postDelayed(this,900);
+        }};
+        dialog.setOnDismissListener(d->handler.removeCallbacks(update));dialog.show();handler.post(update);
+    }
+    private void showJoinLocalDialog(){
+        if(node==null){toast("NODO todavía está iniciando");return;}
+        LinearLayout form=v();pad(form,22,10,22,5);
+        form.addView(txt("Conéctate antes a la zona Wi-Fi del otro teléfono, aunque no tenga internet. Si no aparece automáticamente en Cercanos, escribe la dirección de servidor que muestra ese NODO.",13,MUTED,false));gap(form,12);
+        EditText address=new EditText(this);address.setSingleLine(true);address.setHint("IP del servidor · ej. 192.168.43.1");
+        address.setInputType(InputType.TYPE_CLASS_TEXT);form.addView(address,lp(-1,50));
+        EditText port=new EditText(this);port.setSingleLine(true);port.setHint("Puerto");
+        port.setInputType(InputType.TYPE_CLASS_NUMBER);port.setText("48617");form.addView(port,lp(-1,50));
+        new AlertDialog.Builder(this).setTitle("Unirse a una zona NODO").setView(form)
+            .setPositiveButton("Conectar",(d,w)->{
+                String ip=address.getText().toString().trim();int number;
+                try{number=Integer.parseInt(port.getText().toString().trim());}catch(Exception e){toast("Escribe un puerto válido");return;}
+                node.connectLocalAddress(ip,number);
+                toast("Buscando servidor NODO. Confirma la conexión en el otro teléfono.");
+            }).setNegativeButton("Cancelar",null).show();
     }
     private void showChats(LinearLayout body){
         title(body,"Chats","Tus conversaciones y grupos sin depender de internet");gap(body,15);
@@ -519,6 +577,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         settingsRow(body,"☷","Chats","Exportar conversación o borrar mensajes",this::chatSettings);
         settingsRow(body,"◈","Notificaciones y sonidos","Tonos de mensajes y llamadas",this::notificationSettings);
         settingsRow(body,"◎","Conectividad","Reconexión y tecnología de red",this::connectivitySettings);
+        settingsRow(body,"◉","Zona Wi-Fi NODO","Crear red sin internet para otros teléfonos",this::showOfflineHotspotDialog);
         settingsRow(body,"◌","Segundo plano","Mantener NODO conectado al cerrar la pantalla",this::backgroundSettings);
         settingsRow(body,"⇧","Actualizaciones","Buscar y descargar nuevas versiones dentro de NODO",()->NodeUpdater.showSettings(this));
         settingsRow(body,"▣","Almacenamiento y datos","Archivos de hasta 30 MB",this::storageSettings);
@@ -526,7 +585,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         settingsRow(body,"◐","Apariencia","Estilo original blanco y menta",()->info("Apariencia","NODO utiliza el diseño blanco, verde menta y azul elegido. Temas adicionales vendrán después."));
         settingsRow(body,"?","Ayuda","Cómo conectar dos Android",this::help);
         settingsRow(body,"↗","Invitar amigos","Compartir información sobre NODO",this::shareInvite);
-        gap(body,14);body.addView(txt("NODO Beta v0.7.0 · Versión experimental · Comunicaciones sin cifrado de extremo a extremo. Solo para pruebas.",12,MUTED,false));
+        gap(body,14);body.addView(txt("NODO Beta v0.8.0 · Versión experimental · Comunicaciones sin cifrado de extremo a extremo. Solo para pruebas.",12,MUTED,false));
     }
     private void settingsRow(LinearLayout body,String icon,String name,String sub,Runnable action){
         LinearLayout c=card();LinearLayout row=h();
@@ -893,6 +952,11 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     }
     @Override public void onRequestPermissionsResult(int req,String[] perms,int[] results){
         super.onRequestPermissionsResult(req,perms,results);
+        if(req==REQUEST_HOTSPOT){
+            if(results.length>0&&results[0]==PackageManager.PERMISSION_GRANTED && nodoService!=null){
+                NodoService.start(this);nodoService.startOfflineHotspot();
+            }else toast("Se necesita permiso de Wi-Fi para crear la zona local");
+        }
         if(req==REQUEST_MIC){if(results.length>0&&results[0]==PackageManager.PERMISSION_GRANTED)runMicAction();
             else {if(micAction.startsWith("answer:"))node.rejectCall(micAction.substring(7));if(micAction.startsWith("startcall:"))node.endCall();micAction="";toast("Permiso de micrófono necesario");}}
     }

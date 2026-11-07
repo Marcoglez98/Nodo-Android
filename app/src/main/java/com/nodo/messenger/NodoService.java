@@ -4,6 +4,9 @@ import android.app.*;
 import android.content.*;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
+import android.net.wifi.WifiManager;
+import android.net.wifi.WifiConfiguration;
+import android.net.wifi.SoftApConfiguration;
 import android.os.*;
 import java.util.*;
 import java.util.function.Consumer;
@@ -36,6 +39,9 @@ public final class NodoService extends Service implements LocalNode.Listener {
     private final Map<String,Long> textInFlight=new java.util.concurrent.ConcurrentHashMap<>();
     private Runnable retryQueued;
     private PendingPair pendingPair;
+    private WifiManager.LocalOnlyHotspotReservation hotspotReservation;
+    private boolean hotspotStarting=false;
+    private String hotspotSsid="",hotspotPassword="",hotspotMessage="Zona NODO apagada";
 
     public final class LocalBinder extends Binder {
         public NodoService service(){return NodoService.this;}
@@ -85,6 +91,65 @@ public final class NodoService extends Service implements LocalNode.Listener {
     @Override public void onRebind(Intent intent){super.onRebind(intent);}
 
     LocalNode network(){return node;}
+    String hotspotMessage(){return hotspotMessage;}
+    String hotspotSsid(){return hotspotSsid;}
+    String hotspotPassword(){return hotspotPassword;}
+    boolean hotspotActive(){return hotspotReservation!=null;}
+    boolean hotspotStarting(){return hotspotStarting;}
+    String hotspotAddress(){
+        String ip=LocalNode.localHotspotIpv4();
+        return ip.isEmpty()?"Dirección local todavía no disponible":ip;
+    }
+    int hotspotPort(){return node==null?0:node.listeningPort();}
+    private void hotspotChanged(String status){
+        hotspotMessage=status;
+        updateNotification();
+        LocalNode.Listener l=uiListener;
+        if(l!=null)main.post(()->{if(uiListener==l){l.status(status);l.changed();}});
+    }
+    /** Android's local-only hotspot provides a password-protected Wi-Fi LAN without internet. */
+    void startOfflineHotspot(){
+        if(hotspotReservation!=null||hotspotStarting){hotspotChanged("La zona NODO ya está activa o iniciándose");return;}
+        WifiManager wifi=(WifiManager)getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        if(wifi==null){hotspotChanged("Este teléfono no ofrece Wi-Fi compatible");return;}
+        hotspotStarting=true;hotspotChanged("Creando zona Wi-Fi local…");
+        try{
+            wifi.startLocalOnlyHotspot(new WifiManager.LocalOnlyHotspotCallback(){
+                @Override public void onStarted(WifiManager.LocalOnlyHotspotReservation reservation){
+                    hotspotReservation=reservation;hotspotStarting=false;
+                    try{
+                        if(Build.VERSION.SDK_INT>=30){
+                            SoftApConfiguration cfg=reservation.getSoftApConfiguration();
+                            hotspotSsid=cfg==null?"":cfg.getSsid();
+                            hotspotPassword=cfg==null?"":cfg.getPassphrase();
+                        } else {
+                            WifiConfiguration cfg=reservation.getWifiConfiguration();
+                            hotspotSsid=cfg==null?"":cfg.SSID;
+                            hotspotPassword=cfg==null?"":cfg.preSharedKey;
+                            if(hotspotSsid!=null)hotspotSsid=hotspotSsid.replace("\"","");
+                            if(hotspotPassword!=null)hotspotPassword=hotspotPassword.replace("\"","");
+                        }
+                    }catch(Exception ex){hotspotMessage="Zona encendida; revisa las credenciales";}
+                    hotspotChanged("Zona Wi-Fi sin internet lista · otros teléfonos pueden unirse");
+                }
+                @Override public void onStopped(){
+                    hotspotReservation=null;hotspotStarting=false;hotspotSsid="";hotspotPassword="";
+                    hotspotChanged("Zona Wi-Fi local detenida");
+                }
+                @Override public void onFailed(int reason){
+                    hotspotReservation=null;hotspotStarting=false;hotspotSsid="";hotspotPassword="";
+                    hotspotChanged("No se pudo crear la zona ("+reason+"). Apaga otros puntos de acceso y reintenta.");
+                }
+            },main);
+        }catch(SecurityException denied){hotspotStarting=false;hotspotChanged("Concede el permiso de dispositivos Wi-Fi cercanos");}
+         catch(Exception ex){hotspotStarting=false;hotspotChanged("Zona Wi-Fi no disponible: "+ex.getMessage());}
+    }
+    void stopOfflineHotspot(){
+        WifiManager.LocalOnlyHotspotReservation r=hotspotReservation;
+        hotspotReservation=null;hotspotStarting=false;hotspotSsid="";hotspotPassword="";
+        if(r!=null)try{r.close();}catch(Exception ignored){}
+        hotspotChanged("Zona NODO apagada");
+    }
     boolean enabled(){return store.backgroundEnabled();}
     String pendingCaller(){return incomingPeer;}
     String pendingGroup(){return incomingGroupId;}
@@ -166,7 +231,7 @@ public final class NodoService extends Service implements LocalNode.Listener {
 
     private Notification ongoingNotification(){
         int count=node==null?0:node.connections();
-        String text=capturingAudio?"Llamada de voz activa":
+        String text=hotspotReservation!=null?"Zona Wi-Fi NODO sin internet encendida":capturingAudio?"Llamada de voz activa":
             (count>0?count+" contacto(s) conectados · Wi-Fi local":"Buscando contactos · Wi-Fi local");
         Intent open=new Intent(this,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent tap=PendingIntent.getActivity(this,15,open,PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
@@ -207,6 +272,7 @@ public final class NodoService extends Service implements LocalNode.Listener {
         super.onTaskRemoved(rootIntent);
     }
     @Override public void onDestroy(){
+        stopOfflineHotspot();
         pendingPair=null;
         main.removeCallbacks(retryQueued);
         NodeAlerts.clearCall(this);
