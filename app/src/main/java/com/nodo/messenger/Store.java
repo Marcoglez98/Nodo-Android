@@ -135,7 +135,7 @@ public final class Store {
     public boolean groupDeclined(String gid,String userId){
         return p.getBoolean("group_declined_"+gid+"_"+userId,false);
     }
-    public void groupDeclined(String gid,String userId){
+    public void markGroupDeclined(String gid,String userId){
         p.edit().putBoolean("group_declined_"+gid+"_"+userId,true).apply();
     }
     public boolean groupApproved(String gid,String userId){
