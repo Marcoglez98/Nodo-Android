@@ -1,7 +1,7 @@
 {
-  "versionCode": 60,
-  "versionName": "0.6.0-beta",
-  "notes": "NODO Beta 0.6: interfaz modular y mejoras de comunicación local.",
-  "apkUrl": "https://raw.githubusercontent.com/Marcoglez98/Nodo-Android/nodo-modular-v06/downloads/NODO-Beta-v0.6.0.apk",
-  "sha256": "ab0b84bdf924da24d13172644166eb1adfad640f92a70efbe99f96a3bae72e09"
+  "versionCode": 70,
+  "versionName": "0.7.0-beta",
+  "notes": "Actualizaciones dentro de NODO: búsqueda automática, aviso de nueva versión, descarga segura y confirmación de instalación. Mejoras de estabilidad.",
+  "apkUrl": "https://raw.githubusercontent.com/Marcoglez98/Nodo-Android/nodo-modular-v06/downloads/NODO-Beta-v0.7.0.apk",
+  "sha256": "dde50c61b2f1aad3d95cd629e32950144cb074d7d82ba5013e68aee64e3bfe31"
 }
