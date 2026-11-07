@@ -1,7 +1,7 @@
 {
-  "versionCode": 80,
-  "versionName": "0.8.0-beta",
-  "notes": "NODO ahora puede crear una zona Wi-Fi local sin internet. Los demás teléfonos se unen a la red y se conectan por búsqueda automática o dirección IP. Mejora de reconexión en la zona.",
-  "apkUrl": "https://raw.githubusercontent.com/Marcoglez98/Nodo-Android/nodo-modular-v06/downloads/NODO-Beta-v0.8.0.apk",
-  "sha256": "7ef86ba097c5469245f64504061fca02598da7ee989119551cc70fb28e242d2e"
+  "versionCode": 90,
+  "versionName": "0.9.0-beta",
+  "notes": "Llamadas de voz con reconexión al volver al alcance Wi-Fi sin finalizar automáticamente; contador continuo; grupos con invitaciones y aceptación, incorporación de contactos y mezcla de audio grupal experimental. Actualiza NODO en todos los teléfonos. La continuidad requiere que el servicio permanezca activo.",
+  "apkUrl": "https://raw.githubusercontent.com/Marcoglez98/Nodo-Android/nodo-modular-v06/downloads/NODO-Beta-v0.9.0.apk",
+  "sha256": "b9ea645078876bbd4e7ab6c6fc5b7a02d3ac56d77782146a8960c6fe79d353f1"
 }
