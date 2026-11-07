@@ -1,7 +1,7 @@
 {
-  "versionCode": 90,
-  "versionName": "0.9.0-beta",
-  "notes": "Llamadas de voz con reconexión al volver al alcance Wi-Fi sin finalizar automáticamente; contador continuo; grupos con invitaciones y aceptación, incorporación de contactos y mezcla de audio grupal experimental. Actualiza NODO en todos los teléfonos. La continuidad requiere que el servicio permanezca activo.",
-  "apkUrl": "https://raw.githubusercontent.com/Marcoglez98/Nodo-Android/nodo-modular-v06/downloads/NODO-Beta-v0.9.0.apk",
-  "sha256": "b9ea645078876bbd4e7ab6c6fc5b7a02d3ac56d77782146a8960c6fe79d353f1"
+  "versionCode": 91,
+  "versionName": "0.9.1-beta",
+  "notes": "Zona NODO personalizable: guarda nombre y contraseña de Wi-Fi protegida con Android Keystore. Si el dispositivo es compatible, intenta crear una red local con esos datos. Si Android no lo permite, abre los ajustes del punto de acceso; continúa disponible la zona local automática sin internet. NODO sigue funcionando por Wi-Fi local.",
+  "apkUrl": "https://raw.githubusercontent.com/Marcoglez98/Nodo-Android/nodo-modular-v06/downloads/NODO-Beta-v0.9.1.apk",
+  "sha256": "fd2ec12e5aabc69a233b97a83e5e120890b7aefd9291cf6163a156d09840a2b0"
 }

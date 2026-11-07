@@ -1,12 +1,11 @@
-# Descarga de NODO Beta 0.6
+# NODO Beta 0.9.1 — Descarga oficial
 
-Archivo instalable: [NODO-Beta-v0.6.0.apk](NODO-Beta-v0.6.0.apk)
+[Descargar NODO-Beta-v0.9.1.apk](NODO-Beta-v0.9.1.apk)
 
-- Paquete Android: `com.nodo.messenger.beta`
-- Versión: `0.6.0`
-- Firma compatible con NODO Beta 0.5 (no con NODO original)
-- SHA-256: `ab0b84bdf924da24d13172644166eb1adfad640f92a70efbe99f96a3bae72e09`
+- Paquete: `com.nodo.messenger.beta`
+- Versión: `0.9.1-beta` (versionCode 91)
+- Firma: la misma que NODO Beta 0.9
+- SHA-256 APK: `fd2ec12e5aabc69a233b97a83e5e120890b7aefd9291cf6163a156d09840a2b0`
+- Novedad: configuración de nombre/clave para zona Wi-Fi, con alternativas según Android.
 
-[Descarga directa del APK](https://raw.githubusercontent.com/Marcoglez98/Nodo-Android/nodo-modular-v06/downloads/NODO-Beta-v0.6.0.apk)
-
-**Nota:** solo para pruebas; conserva una copia de tus datos. No desinstales NODO Beta antes de intentar actualizarlo.
+**No desinstales la app anterior si quieres conservar su historial.** Se necesita la misma firma para actualizar.
