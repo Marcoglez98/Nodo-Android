@@ -1,57 +1,25 @@
-# NODO Beta 0.6 — Diseño modular (Android Java 17)
+# NODO Beta 0.7: actualizaciones integradas
 
-NODO es una aplicación **offline-first de mensajería por Wi-Fi local** con la identidad del diseño elegido (blanco, verde menta `#00D26A`, azul suave y tarjetas de 22 dp). Esta versión **conserva el mismo ID** `com.nodo.messenger.beta` que la beta 0.5 y aumenta `versionCode` a **60**. Para actualizar sin perder datos, hay que firmar el APK con la **misma clave privada de NODO Beta**, nunca con una firma aleatoria de GitHub.
+NODO Beta permite revisar nuevas versiones desde **Ajustes → Actualizaciones** y desde avisos de Android. La comprobación necesita internet; los mensajes por LAN siguen funcionando sin internet.
 
-## Pantallas
+## Flujo de actualizaciones
+1. A partir de NODO Beta **0.7**, la aplicación consulta periódicamente `updates/beta.json` publicado en este repositorio.
+2. Si `versionCode` es superior al instalado, ofrece **Descargar** y muestra notas de versión.
+3. La app descarga el APK por HTTPS a su almacenamiento interno, comprueba SHA-256, ID de paquete y versión, y solicita confirmación para instalar con el instalador de Android.
+4. Android exige autorización de instalación desde esta fuente cuando corresponde; no hay instalación silenciosa.
+5. La firma del APK debe coincidir con la instalación anterior. La clave de firma privada NO debe aparecer en GitHub público.
 
-- **Descubrir:** radar estético, NSD/mDNS, equipos en la misma LAN/hotspot, solicitudes de enlace autorizadas. No inventa distancias: NSD no proporciona metros.
-- **Chats:** conversaciones recientes con vista previa/hora, contadores de mensajes no leídos, favoritos, grupos; filtros *Todos / Cercanos / Favoritos* y accesos *Mensajes / Llamadas / Archivos*.
-- **Conversación:** burbujas y estado entregado (ACK, no equivale a leído), emojis, stickers locales, notas de voz, PDF, imágenes, video y texto visualizables en NODO. Adjuntos: Galería, Cámara (imagen de vista previa), Archivo/PDF, Contacto NODO y Ubicación introducida por el usuario. Llamadas individuales y grupales experimentales por Wi-Fi local.
-- **Llamadas:** voz LAN, contador y acceso a chat; videollamadas pendientes.
-- **Mi perfil y ajustes:** editar nombre/foto/estado, visibilidad mediante anuncio mDNS, autorización de nuevas solicitudes, compartir última conexión cuando ambos clientes admiten ese dato, reconexión, segundo plano y notificaciones. Bluetooth/datos móviles aparecen deshabilitados con explicación hasta tener transporte real.
+## Publicar una nueva versión para todos los teléfonos
+- Cambiar versionCode/versionName en `app/build.gradle`.
+- Subir y probar el código.
+- Configurar secretos privados `NODO_KEYSTORE_B64` y `NODO_KEYSTORE_PASSWORD` en **Settings > Secrets and variables > Actions**.
+- Ejecutar Actions: **NODO Beta 0.7 - compilación y publicación de actualizaciones** > **Run workflow**, marcar **publicar=true**.
+- El workflow sube el APK firmado y actualiza el manifiesto `updates/beta.json`. Los dispositivos detectan el nuevo número de versión. La publicación sin secretos se bloquea para impedir APK inválidos.
 
-La barra inferior tiene **cuatro opciones:** Descubrir, Chats, Llamadas y Mi perfil. Archivos está dentro de Chats para evitar una quinta pestaña.
+**Los secretos no están configurados por el asistente.** En ausencia de ellos puede compilarse un APK sin firmar para desarrollo, pero nunca se distribuye como actualización.
 
-## Organización del código
+El manifiesto inicial apunta a la versión 0.6 firmada existente. Para NODO 0.7, publicar el APK firmado y actualizar el manifiesto de forma conjunta.
 
-```text
-app/src/main/java/com/nodo/messenger/
-├── MainActivity.java                # Composición y navegación Android
-├── NodoService.java                 # Foreground service persistente y entrega de eventos
-├── LocalNode.java                   # Sockets TCP, NSD/mDNS, enlace local y audio en vivo
-├── AudioEngine.java                 # Captura/reproducción durante llamada
-├── Store.java                       # Persistencia local de prueba
-├── NodeViewer.java                 # Visor multimedia/documentos integrado
-├── NodeAlerts.java                 # Canales Android y avisos
-├── data/
-│   └── ChatRepository.java         # Adaptador de conversaciones y estado de lectura
-├── domain/
-│   └── MessageRecord.java          # Modelo inmutable de mensaje
-├── transport/
-│   ├── NearbyTransport.java        # Contrato de transporte
-│   ├── LanTransport.java           # Adaptador LAN disponible
-│   └── PlannedTransport.java       # Capacidades futuras sin engañar al usuario
-└── ui/
-    ├── NodoTheme.java              # Paleta, elevación, tipografía y tarjetas
-    ├── NodoNavIcon.java            # Iconos vectoriales sin fuentes de emojis
-    └── NodoBottomBar.java          # Navegación de cuatro pestañas
-```
+La comprobación periódica utiliza JobScheduler (~12 horas según planificación de Android) y notificaciones; no se puede garantizar una hora exacta por restricciones de batería o falta de internet. No se admiten actualizaciones desde versiones antiguas firmadas con certificados distintos. La Beta mantiene `com.nodo.messenger.beta`.
 
-## Funcionamiento comprobable
-
-1. Instala exactamente la **misma versión** de NODO Beta en dos teléfonos conectados al **mismo Wi-Fi o hotspot**, aunque no tenga acceso a internet.
-2. Autoriza el enlace en el dispositivo receptor; la reconexión es automática únicamente para usuarios conocidos.
-3. Prueba enviar un único mensaje, verificar un solo mensaje entrante, y recibir con el servicio persistente de NODO activo.
-4. Confirma el bloqueo de pantalla, deslizamiento de la actividad y límites de batería de cada fabricante.
-5. En Chats añade favoritos, cambia filtros, comparte fotos, voz y documentos, y observa el contador de no leídos.
-6. Revisa **Ajustes → Privacidad**: al ocultarte de la lista de cercanos, los contactos ya autorizados pueden seguir teniendo acceso al enlace.
-
-**No implementado**: Wi-Fi Direct puro sin punto de acceso, Bluetooth, servidor relay para datos móviles, videollamadas WebRTC, cifrado de extremo a extremo, sincronización multidispositivo por internet. Las llamadas grupales son experimentales; no se garantiza mezcla de audio sin eco en todos los teléfonos. Los recibos distinguen *enviado/entregado*, pero aún no indican lectura remota. El estado de última conexión se comparte voluntariamente y solo se conoce para equipos compatibles que han establecido conexión.
-
-**Privacidad:** el protocolo de prueba utiliza TCP local sin cifrado de extremo a extremo ni verificación criptográfica de identidad. No usar en redes públicas ni para datos confidenciales. Para una versión de producción, migrar mensajes a Room, implementar autenticación/cifrado auditado, controles de tamaño/validación de archivos, y pruebas de estabilidad con varias versiones Android.
-
-## Compilación
-
-Android Gradle Plugin 8.7.3; Java 17; Gradle 8.10.2; compileSdk y targetSdk 35; minSdk 26. Ejecuta `gradle :app:assembleRelease` en Android SDK preparado; sin variables `NODO_SIGNING_FILE`/`NODO_SIGNING_PASSWORD`, produce APK **sin firmar**. Para actualizaciones, cargar firma Beta en un entorno privado, nunca al GitHub público.
-
-El workflow `nodo-modular.yml` compila el release no firmado en GitHub Actions y genera artefacto para firma privada. No incorpora credenciales.
+Funcionalidades de NODO: Wi-Fi LAN, chats, notas de voz, archivos, llamadas y grupos experimentales. Bluetooth, Wi-Fi Direct y videollamadas siguen pendientes.

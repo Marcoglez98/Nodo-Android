@@ -87,6 +87,8 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         if (Build.VERSION.SDK_INT >= 30) getWindow().setDecorFitsSystemWindows(false);
         NodeAlerts.setup(this);
         store=new Store(this);
+        NodeUpdater.schedule(this);
+        handler.postDelayed(()->NodeUpdater.check(this,false),2800);
         chats=new ChatRepository(store);
         renderDisconnected();
         if(store.backgroundEnabled()){
@@ -107,6 +109,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     }
     @Override protected void onResume(){
         super.onResume();foreground=true;
+        NodeUpdater.onResume(this);
         if(nodoService!=null){
             nodoService.attach(this);
             String pending=nodoService.pendingCaller();
@@ -128,6 +131,10 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);handleLaunch(intent);}
     private void handleLaunch(Intent intent){
         if(intent==null)return;
+        if(intent.getBooleanExtra("nodo_show_updates",false)){
+            intent.removeExtra("nodo_show_updates");
+            handler.postDelayed(()->NodeUpdater.check(this,true),350);
+        }
         String peer=intent.getStringExtra("nodo_peer");
         if(peer==null||peer.isEmpty())return;
         intent.removeExtra("nodo_peer");
@@ -513,12 +520,13 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         settingsRow(body,"◈","Notificaciones y sonidos","Tonos de mensajes y llamadas",this::notificationSettings);
         settingsRow(body,"◎","Conectividad","Reconexión y tecnología de red",this::connectivitySettings);
         settingsRow(body,"◌","Segundo plano","Mantener NODO conectado al cerrar la pantalla",this::backgroundSettings);
+        settingsRow(body,"⇧","Actualizaciones","Buscar y descargar nuevas versiones dentro de NODO",()->NodeUpdater.showSettings(this));
         settingsRow(body,"▣","Almacenamiento y datos","Archivos de hasta 30 MB",this::storageSettings);
         settingsRow(body,"♧","Dispositivos autorizados","Consultar y revocar confianza",this::trustedContactsDialog);
         settingsRow(body,"◐","Apariencia","Estilo original blanco y menta",()->info("Apariencia","NODO utiliza el diseño blanco, verde menta y azul elegido. Temas adicionales vendrán después."));
         settingsRow(body,"?","Ayuda","Cómo conectar dos Android",this::help);
         settingsRow(body,"↗","Invitar amigos","Compartir información sobre NODO",this::shareInvite);
-        gap(body,14);body.addView(txt("NODO Beta v0.6.0 · Versión experimental · Comunicaciones sin cifrado de extremo a extremo. Solo para pruebas.",12,MUTED,false));
+        gap(body,14);body.addView(txt("NODO Beta v0.7.0 · Versión experimental · Comunicaciones sin cifrado de extremo a extremo. Solo para pruebas.",12,MUTED,false));
     }
     private void settingsRow(LinearLayout body,String icon,String name,String sub,Runnable action){
         LinearLayout c=card();LinearLayout row=h();

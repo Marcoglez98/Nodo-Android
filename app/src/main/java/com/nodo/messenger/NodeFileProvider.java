@@ -17,7 +17,7 @@ public final class NodeFileProvider extends ContentProvider {
     public static Uri uri(String folder,String name){return new Uri.Builder().scheme("content").authority("com.nodo.messenger.beta.files").appendPath(folder).appendPath(name).build();}
     private File file(Uri u)throws FileNotFoundException {
         List<String> p=u.getPathSegments();
-        if(p.size()!=2 || !(p.get(0).equals("received")||p.get(0).equals("sent")||p.get(0).equals("voice")))throw new FileNotFoundException("Ruta no permitida");
+        if(p.size()!=2 || !(p.get(0).equals("received")||p.get(0).equals("sent")||p.get(0).equals("voice")||p.get(0).equals("updates")))throw new FileNotFoundException("Ruta no permitida");
         if(p.get(1).contains("/")||p.get(1).contains(".."))throw new FileNotFoundException("Nombre no permitido");
         File f=new File(new File(getContext().getFilesDir(),p.get(0)),p.get(1));
         if(!f.isFile())throw new FileNotFoundException("Archivo no encontrado");
