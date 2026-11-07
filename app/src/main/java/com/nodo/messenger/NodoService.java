@@ -167,7 +167,7 @@ public final class NodoService extends Service implements LocalNode.Listener {
             UUID.randomUUID().toString(),text);
         store.saveMessage(groupKey,store.newMessage(true,"text",text,"","",delivered>0));
     }
-    void announceGroup(String gid){node.sendGroupInfo(gid,store.groupName(gid),store.groupMembers(gid));}
+    void announceGroup(String gid){node.sendGroupInvitations(gid,store.groupName(gid),store.groupMembers(gid));}
     void acceptGroup(String peer){
         incomingPeer="";incomingGroupId="";incomingGroupName="";
         NodeAlerts.clearCall(this);node.acceptGroupCall(peer);
@@ -231,7 +231,8 @@ public final class NodoService extends Service implements LocalNode.Listener {
 
     private Notification ongoingNotification(){
         int count=node==null?0:node.connections();
-        String text=hotspotReservation!=null?"Zona Wi-Fi NODO sin internet encendida":capturingAudio?"Llamada de voz activa":
+        String text=node!=null&&node.isCallReconnecting()?"Llamada en espera · buscando reconexión Wi-Fi":
+            hotspotReservation!=null?"Zona Wi-Fi NODO sin internet encendida":capturingAudio?"Llamada de voz activa":
             (count>0?count+" contacto(s) conectados · Wi-Fi local":"Buscando contactos · Wi-Fi local");
         Intent open=new Intent(this,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent tap=PendingIntent.getActivity(this,15,open,PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
@@ -292,7 +293,10 @@ public final class NodoService extends Service implements LocalNode.Listener {
     private void flushPending(){
         if(node==null)return;
         long now=System.currentTimeMillis();
-        for(String gid:store.groups())node.sendGroupInfo(gid,store.groupName(gid),store.groupMembers(gid));
+        for(String gid:store.groups()){
+            node.sendGroupInvitations(gid,store.groupName(gid),store.groupMembers(gid));
+            node.sendGroupInfo(gid,store.groupName(gid),store.groupMembers(gid));
+        }
         for(String id:store.contacts())if(node.isConnected(id)){
             JSONArray messages=store.messages(id);
             for(int i=0;i<messages.length();i++){
@@ -317,7 +321,8 @@ public final class NodoService extends Service implements LocalNode.Listener {
     }
     @Override public void groupIncoming(LocalNode.Peer peer,String gid,String gname,List<String> members,String mid,String text){
         if(gid==null||!gid.matches("[a-f0-9]{32}"))return;
-        if(!members.contains(store.id())||!members.contains(peer.id))return;
+        if(!members.contains(store.id())||!members.contains(peer.id) || !store.groups().contains(gid)
+            || !store.groupApproved(gid,peer.id))return;
         store.ensureGroup(gid,gname,members);
         if(store.saveIncomingOnce("group:"+gid,mid,"text",text,"","")){
             LocalNode.Listener listener=uiListener;
@@ -325,8 +330,50 @@ public final class NodoService extends Service implements LocalNode.Listener {
             else NodeAlerts.message(this,store,"group:"+gid,gname,peer.name+": "+text);
         }
     }
+    @Override public void groupInvitation(LocalNode.Peer peer,String gid,String name,List<String> members){
+        if(store.groups().contains(gid)){
+            node.sendGroupJoin(peer.id,gid);return;
+        }
+        boolean newlyInvited=store.invitation(gid).optString("inviter","").isEmpty();
+        store.rememberGroupInvitation(gid,name,members,peer.id);
+        if(newlyInvited)NodeAlerts.message(this,store,peer.id,"Invitación al grupo",
+            peer.name+" te invita a unirte a «"+name+"». Abre NODO para aceptar o rechazar.");
+        LocalNode.Listener ui=uiListener;
+        if(ui!=null)main.post(()->ui.groupInvitation(peer,gid,name,members));
+    }
+    @Override public void groupJoined(LocalNode.Peer peer,String gid){
+        store.groupApproved(gid,peer.id,true);
+        node.announceGroupMember(gid,peer.id);
+        node.sendGroupInfo(gid,store.groupName(gid),store.groupMembers(gid));
+        LocalNode.Listener ui=uiListener;
+        if(ui!=null)main.post(()->ui.groupJoined(peer,gid));
+    }
+    @Override public void groupMemberKnown(LocalNode.Peer peer,String gid,String joinedId){
+        store.groupApproved(gid,joinedId,true);
+        LocalNode.Listener ui=uiListener;
+        if(ui!=null)main.post(ui::changed);
+    }
+    @Override public void callConnectionChanged(){
+        LocalNode.Listener ui=uiListener;
+        if(ui!=null)main.post(ui::callConnectionChanged);
+        main.post(this::updateNotification);
+    }
+    void answerGroupInvitation(String gid,boolean accepted){
+        JSONObject invite=store.invitation(gid);
+        String inviter=invite.optString("inviter","");
+        if(accepted){
+            String peer=store.acceptGroupInvitation(gid);
+            if(!peer.isEmpty()){node.sendGroupJoin(peer,gid);}
+        }else {
+            store.declineGroupInvitation(gid);
+            if(!inviter.isEmpty())node.sendGroupDecline(inviter,gid);
+        }
+        LocalNode.Listener ui=uiListener;
+        if(ui!=null)main.post(ui::changed);
+    }
     @Override public void groupKnown(LocalNode.Peer peer,String gid,String name,List<String> members){
-        if(gid!=null&&gid.matches("[a-f0-9]{32}")&&members.contains(peer.id)&&members.contains(store.id())){
+        if(gid!=null&&gid.matches("[a-f0-9]{32}") && store.groups().contains(gid)
+            && store.groupApproved(gid,store.id()) && members.contains(peer.id)&&members.contains(store.id())){
             store.ensureGroup(gid,name,members);
             LocalNode.Listener listener=uiListener;
             if(listener!=null)main.post(listener::changed);

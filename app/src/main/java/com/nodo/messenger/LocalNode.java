@@ -26,6 +26,10 @@ public final class LocalNode {
         void delivered(Peer peer,String messageId);
         void groupIncoming(Peer peer,String gid,String groupName,List<String> members,String mid,String text);
         void groupKnown(Peer peer,String gid,String groupName,List<String> members);
+        void groupInvitation(Peer peer,String gid,String groupName,List<String> members);
+        void groupJoined(Peer peer,String gid);
+        void groupMemberKnown(Peer peer,String gid,String joinedId);
+        void callConnectionChanged();
         void groupCallOffer(Peer peer,String gid,String name);
         void groupCallChanged();
         void callOffer(Peer peer);
@@ -47,6 +51,9 @@ public final class LocalNode {
     private final ExecutorService pool=Executors.newCachedThreadPool();
     private final ScheduledExecutorService monitor=Executors.newSingleThreadScheduledExecutor();
     private final Map<String,Discovered> nearby=new ConcurrentHashMap<>();
+    private final Map<String,Long> inviteLastSent=new ConcurrentHashMap<>();
+    private final Map<String,ArrayBlockingQueue<byte[]>> groupAudioFrames=new ConcurrentHashMap<>();
+    private volatile ScheduledFuture<?> groupMixTask;
     private final Map<String,Connection> sockets=new ConcurrentHashMap<>();
     private final Set<String> connecting=ConcurrentHashMap.newKeySet();
     private volatile boolean running=false;
@@ -59,6 +66,10 @@ public final class LocalNode {
     private WifiManager.MulticastLock multicast;
     private AudioEngine audio;
     private volatile String activeCall="";
+    private volatile String callSessionId="";
+    // A session remains active through temporary Wi-Fi disconnections until someone hangs up.
+    private volatile boolean callRecovered=false;
+    private final Map<String,Long> lastContactLost=new ConcurrentHashMap<>();
     private volatile long connectedCallAt=0L;
     private volatile boolean groupCall=false;
     private volatile String currentGroup="";
@@ -114,6 +125,17 @@ public final class LocalNode {
         }catch(Exception ex){return "";}
     }
     public boolean isCalling(){return !activeCall.isEmpty();}
+    public boolean isCallReconnecting(){
+        if(activeCall.isEmpty()||connectedCallAt<=0)return false;
+        if(groupCall){
+            if(activeCall.startsWith("group:")){
+                for(String id:groupCallMembers)if(isConnected(id))return false;
+                return true;
+            }
+            return !isConnected(activeCall);
+        }
+        return !isConnected(activeCall);
+    }
     public boolean groupCallActive(){return groupCall;}
     public String activeGroupId(){return currentGroup;}
     public long callDuration(){return connectedCallAt==0 ? -1 : (System.currentTimeMillis()-connectedCallAt)/1000;}
@@ -154,7 +176,8 @@ public final class LocalNode {
                             nearby.put(name,d);listener.changed();
                             String peerId=store.matchShort(d.shortId());
                             // Only one side initiates reconnect to avoid two competing sockets.
-                            if(peerId!=null && store.autoConnect() && store.id().compareTo(peerId)<0 && !isConnected(peerId))connect(d);
+                            if(peerId!=null && store.autoConnect() && !isConnected(peerId)
+                                && (store.id().compareTo(peerId)<0 || System.currentTimeMillis()-lastContactLost.getOrDefault(peerId,0L)>18000))connect(d);
                         }
                     });}catch(Exception ex){listener.status("Descubrimiento: "+ex.getMessage());}
                 }
@@ -193,8 +216,8 @@ public final class LocalNode {
                     lastReconnect=now;
                     for(Discovered d:nearby.values()){
                         String id=store.matchShort(d.shortId());
-                        if(id!=null && store.autoConnect() && store.id().compareTo(id)<0
-                            && !isConnected(id))connect(d);
+                        if(id!=null && store.autoConnect() && !isConnected(id)
+                            && (store.id().compareTo(id)<0 || now-lastContactLost.getOrDefault(id,0L)>18000))connect(d);
                     }
                 }
 
@@ -231,7 +254,7 @@ public final class LocalNode {
             s.setTcpNoDelay(true);
             DataInputStream in=new DataInputStream(new BufferedInputStream(s.getInputStream()));
             DataOutputStream out=new DataOutputStream(new BufferedOutputStream(s.getOutputStream()));
-            JSONObject hello=new JSONObject(); hello.put("type","hello");hello.put("id",store.id());hello.put("name",store.name());hello.put("avatar",avatarBase64());hello.put("proto",2);hello.put("lastSeen",store.shareLastSeen()?System.currentTimeMillis():0L);
+            JSONObject hello=new JSONObject(); hello.put("type","hello");hello.put("id",store.id());hello.put("name",store.name());hello.put("avatar",avatarBase64());hello.put("proto",3);hello.put("lastSeen",store.shareLastSeen()?System.currentTimeMillis():0L);
             if(outgoing)write(out,hello,null);
             JSONObject other=read(in);
             if(!"hello".equals(other.optString("type")))throw new IOException("Saludo no válido");
@@ -261,8 +284,15 @@ public final class LocalNode {
             Connection old=sockets.get(remoteId);
             if(old!=null&&!old.socket.isClosed() && System.currentTimeMillis()-old.lastRx<40000)return;
             if(old!=null){try{old.socket.close();}catch(Exception ignored){}}
-            cn=new Connection(s,in,out,new Peer(remoteId,remoteName),remoteProto>=2);
-            sockets.put(remoteId,cn);listener.changed();listener.status("Conectado a "+remoteName);
+            cn=new Connection(s,in,out,new Peer(remoteId,remoteName),remoteProto);
+            sockets.put(remoteId,cn);lastContactLost.remove(remoteId);
+            listener.changed();listener.status("Conectado a "+remoteName);
+            // Recover an accepted audio session; do not call again or reset its timer.
+            if(remoteProto>=3 && connectedCallAt>0 && !callSessionId.isEmpty()){
+                if(!groupCall && activeCall.equals(remoteId))sendCallResume(remoteId);
+                else if(groupCall && groupCallMembers.contains(remoteId))sendGroupResume(remoteId);
+            }
+            listener.callConnectionChanged();
             s.setSoTimeout(0);
             while(running&&!s.isClosed()){
                 JSONObject m=read(in);cn.lastRx=System.currentTimeMillis();String type=m.optString("type");
@@ -276,22 +306,51 @@ public final class LocalNode {
                 }else if(type.equals("ack")){
                     listener.delivered(cn.peer,m.optString("mid"));
                 }else if(type.equals("groupInfo")){
-                    listener.groupKnown(cn.peer,m.optString("gid"),m.optString("gname"),idsFrom(m.optJSONArray("members")));
+                    String gid=m.optString("gid");
+                    if(store.groups().contains(gid) && store.trusted(cn.peer.id))
+                        listener.groupKnown(cn.peer,gid,m.optString("gname"),idsFrom(m.optJSONArray("members")));
+                }else if(type.equals("groupInvite")){
+                    String gid=m.optString("gid");List<String> members=idsFrom(m.optJSONArray("members"));
+                    if(store.trusted(cn.peer.id)&&gid.matches("[a-f0-9]{32}")&&members.contains(store.id())&&members.contains(cn.peer.id)){
+                        if(store.groups().contains(gid))sendGroupJoin(cn.peer.id,gid);
+                        else listener.groupInvitation(cn.peer,gid,m.optString("gname","Grupo NODO"),members);
+                    }
+                }else if(type.equals("groupDecline")){
+                    String gid=m.optString("gid","");
+                    if(gid.matches("[a-f0-9]{32}")&&store.groups().contains(gid))
+                        store.groupDeclined(gid,cn.peer.id);
+                }else if(type.equals("groupMemberJoined")){
+                    String gid=m.optString("gid","");String member=m.optString("id","");
+                    if(gid.matches("[a-f0-9]{32}")&&member.matches("[a-f0-9]{32}")
+                        && store.groups().contains(gid)&&store.groupOwner(gid).equals(cn.peer.id)
+                        && store.groupMembers(gid).contains(member))
+                        listener.groupMemberKnown(cn.peer,gid,member);
+                }else if(type.equals("groupJoin")){
+                    String gid=m.optString("gid","");
+                    if(store.trusted(cn.peer.id) && gid.matches("[a-f0-9]{32}") && store.groups().contains(gid)
+                      && store.groupMembers(gid).contains(cn.peer.id))listener.groupJoined(cn.peer,gid);
                 }else if(type.equals("groupText")){
-                    String mid=m.optString("mid","");
-                    listener.groupIncoming(cn.peer,m.optString("gid"),m.optString("gname"),idsFrom(m.optJSONArray("members")),mid,m.optString("body"));
+                    String mid=m.optString("mid","");String gid=m.optString("gid","");
+                    if(store.groups().contains(gid)&&store.groupApproved(gid,cn.peer.id))
+                        listener.groupIncoming(cn.peer,gid,m.optString("gname"),idsFrom(m.optJSONArray("members")),mid,m.optString("body"));
                 }else if(type.equals("groupOffer")){
                     if(activeCall.isEmpty()){
-                        groupCall=true;currentGroup=m.optString("gid");activeCall=cn.peer.id;
-                        connectedCallAt=0;groupCallMembers.clear();groupCallInvited.clear();
+                        String gid=m.optString("gid","");
+                        if(!store.groups().contains(gid)||!store.groupApproved(gid,store.id())){
+                            send(cn.peer.id,"groupEnd","");continue;
+                        }
+                        groupCall=true;currentGroup=gid;activeCall=cn.peer.id;
+                        callSessionId=m.optString("cid","");connectedCallAt=0;groupCallMembers.clear();groupCallInvited.clear();
                         groupCallMembers.add(cn.peer.id);
                         listener.groupCallOffer(cn.peer,currentGroup,m.optString("gname","Grupo NODO"));
                     }else send(cn.peer.id,"groupEnd","");
                 }else if(type.equals("groupAccept")){
                     if(groupCall && activeCall.startsWith("group:") && currentGroup.equals(m.optString("gid"))){
-                        groupCallMembers.add(cn.peer.id);
-                        groupCallInvited.remove(cn.peer.id);
-                        if(connectedCallAt==0)connectedCallAt=System.currentTimeMillis();
+                        if(store.groupApproved(currentGroup,cn.peer.id)){
+                            groupCallMembers.add(cn.peer.id);
+                            groupCallInvited.remove(cn.peer.id);
+                            if(connectedCallAt==0)connectedCallAt=System.currentTimeMillis();
+                        }
                         listener.groupCallChanged();
                     }
                 }else if(type.equals("groupLeave")){
@@ -300,16 +359,38 @@ public final class LocalNode {
                         stopAudio();listener.callEnded(cn.peer);
                     }else listener.groupCallChanged();
                 }else if(type.equals("groupEnd")){
-                    if(groupCall){stopAudio();listener.callEnded(cn.peer);}
+                    if(groupCall && (m.optString("cid","").isEmpty()
+                        || callSessionId.equals(m.optString("cid")))){
+                        stopAudio();listener.callEnded(cn.peer);
+                    }
+                }else if(type.equals("callResume")){
+                    String cid=m.optString("cid","");
+                    if(!cid.isEmpty() && cid.equals(callSessionId)&&!groupCall
+                        && activeCall.equals(cn.peer.id)&&connectedCallAt>0){
+                        JSONObject reply=new JSONObject();reply.put("type","callResumeAck");reply.put("cid",cid);
+                        sendJson(cn.peer.id,reply);listener.callConnectionChanged();
+                    }else send(cn.peer.id,"callEnd","");
+                }else if(type.equals("callResumeAck")){
+                    if(!groupCall && activeCall.equals(cn.peer.id)
+                        && callSessionId.equals(m.optString("cid")))listener.callConnectionChanged();
+                }else if(type.equals("groupResume")){
+                    String cid=m.optString("cid","");
+                    if(groupCall && !cid.isEmpty() && cid.equals(callSessionId)
+                        && currentGroup.equals(m.optString("gid")) && groupCallMembers.contains(cn.peer.id)){
+                        JSONObject reply=new JSONObject();reply.put("type","groupResumeAck");reply.put("cid",cid);
+                        sendJson(cn.peer.id,reply);listener.callConnectionChanged();
+                    }else if(!cid.isEmpty()){
+                        JSONObject ending=new JSONObject();ending.put("type","groupEnd");
+                        ending.put("cid",cid);sendJson(cn.peer.id,ending);
+                    }
+                }else if(type.equals("groupResumeAck")){
+                    if(groupCall && callSessionId.equals(m.optString("cid")))listener.callConnectionChanged();
                 }else if(type.equals("groupPcm")){
                     int len=m.optInt("size",0);if(len<1||len>4096)throw new IOException("Audio inválido");
                     byte[] pcm=new byte[len];in.readFully(pcm);
                     if(groupCall && audio!=null && groupCallMembers.contains(cn.peer.id)){
-                        audio.play(pcm);
-                        if(activeCall.startsWith("group:")){
-                            // Simple star relay, maximum four listeners: no central infrastructure.
-                            for(String member:groupCallMembers)if(!member.equals(cn.peer.id))sendPcm(member,"groupPcm",pcm);
-                        }
+                        if(activeCall.startsWith("group:"))queueGroupFrame(cn.peer.id,pcm);
+                        else audio.play(pcm); // Participants receive the host's mixed stream.
                     }
                 }else if(type.equals("file")){
                     long size=m.optLong("size",-1);if(size<0||size>MAX_FILE)throw new IOException("Archivo demasiado grande");
@@ -327,14 +408,20 @@ public final class LocalNode {
                 }else if(type.equals("pong")){
                     // Heartbeat reply.
                 }else if(type.equals("callOffer")){
-                    if(activeCall.isEmpty()){activeCall=cn.peer.id;listener.callOffer(cn.peer);}
+                    if(activeCall.isEmpty()){
+                        activeCall=cn.peer.id;callSessionId=m.optString("cid","");
+                        listener.callOffer(cn.peer);
+                    }
                     else send(cn.peer.id,"callEnd","");
                 }else if(type.equals("callAccept")){
-                    if(activeCall.equals(cn.peer.id)){
-                        connectedCallAt=System.currentTimeMillis();listener.callAccepted(cn.peer);
+                    if(activeCall.equals(cn.peer.id) && (callSessionId.isEmpty()
+                        || callSessionId.equals(m.optString("cid","")))){
+                        if(connectedCallAt==0)connectedCallAt=System.currentTimeMillis();
+                        listener.callAccepted(cn.peer);
                     }
                 }else if(type.equals("callEnd")){
-                    if(activeCall.equals(cn.peer.id)){stopAudio();listener.callEnded(cn.peer);}
+                    if(activeCall.equals(cn.peer.id) && (m.optString("cid","").isEmpty()
+                        || m.optString("cid","").equals(callSessionId))){stopAudio();listener.callEnded(cn.peer);}
                 }else if(type.equals("pcm")){
                     if(audio!=null&&activeCall.equals(cn.peer.id)){
                         int len=m.optInt("size",0);if(len<1||len>4096)throw new IOException("Audio inválido");
@@ -349,11 +436,12 @@ public final class LocalNode {
         finally{
             if(cn!=null){
                 sockets.remove(cn.peer.id,cn);
-                if(groupCall){
-                    groupCallMembers.remove(cn.peer.id);groupCallInvited.remove(cn.peer.id);
-                    if(activeCall.equals(cn.peer.id)){stopAudio();listener.callEnded(cn.peer);}
-                    else listener.groupCallChanged();
-                }else if(activeCall.equals(cn.peer.id)){stopAudio();listener.callEnded(cn.peer);}
+                lastContactLost.put(cn.peer.id,System.currentTimeMillis());
+                // A disconnected socket is not an intentional hang-up.
+                // Preserve the accepted session/timer until a participant explicitly ends it.
+                if(groupCall)listener.groupCallChanged();
+                if(activeCall.equals(cn.peer.id)||groupCallMembers.contains(cn.peer.id))
+                    listener.callConnectionChanged();
                 listener.changed();
             }
             try{s.close();}catch(IOException ignored){}
@@ -388,8 +476,8 @@ public final class LocalNode {
     }
     private static final class Connection {
         final Socket socket;final DataInputStream in;final DataOutputStream out;final Peer peer;
-        final Object writeLock=new Object();final boolean modern;volatile long lastRx=System.currentTimeMillis();
-        Connection(Socket s,DataInputStream i,DataOutputStream o,Peer p,boolean modern){socket=s;in=i;out=o;peer=p;this.modern=modern;}
+        final Object writeLock=new Object();final boolean modern;final int protocol;volatile long lastRx=System.currentTimeMillis();
+        Connection(Socket s,DataInputStream i,DataOutputStream o,Peer p,int protocol){socket=s;in=i;out=o;peer=p;this.protocol=protocol;modern=protocol>=2;}
     }
     private static List<String> idsFrom(org.json.JSONArray a){
         List<String> ids=new ArrayList<>();if(a==null)return ids;
@@ -409,16 +497,43 @@ public final class LocalNode {
         try{JSONObject j=new JSONObject();j.put("type","text");j.put("mid",mid);j.put("body",text);return sendJson(id,j);}
         catch(Exception e){return false;}
     }
+    public void sendGroupInvitations(String gid,String name,List<String> members){
+        if(!store.groupOwner(gid).equals(store.id()))return;
+        try{
+            JSONObject j=new JSONObject();j.put("type","groupInvite");j.put("gid",gid);
+            j.put("gname",name);j.put("members",idsArray(members));
+            for(String id:members)if(!id.equals(store.id())&&isConnected(id)
+                && !store.groupApproved(gid,id)&&!store.groupDeclined(gid,id)){
+                String key=gid+":"+id;long now=System.currentTimeMillis();
+                if(now-inviteLastSent.getOrDefault(key,0L)>60000 && sendJson(id,j))
+                    inviteLastSent.put(key,now);
+            }
+        }catch(Exception ignored){}
+    }
+    public void sendGroupDecline(String inviter,String gid){
+        try{JSONObject j=new JSONObject();j.put("type","groupDecline");j.put("gid",gid);sendJson(inviter,j);}
+        catch(Exception ignored){}
+    }
+    public void announceGroupMember(String gid,String joinedId){
+        try{JSONObject m=new JSONObject();m.put("type","groupMemberJoined");m.put("gid",gid);m.put("id",joinedId);
+            for(String member:store.groupMembers(gid))if(!member.equals(store.id())&&store.groupApproved(gid,member))
+                sendJson(member,m);
+        }catch(Exception ignored){}
+    }
+    public void sendGroupJoin(String inviter,String gid){
+        try{JSONObject j=new JSONObject();j.put("type","groupJoin");j.put("gid",gid);sendJson(inviter,j);}
+        catch(Exception ignored){}
+    }
     public void sendGroupInfo(String gid,String name,List<String> members){
         try{JSONObject j=new JSONObject();j.put("type","groupInfo");j.put("gid",gid);
             j.put("gname",name);j.put("members",idsArray(members));
-            for(String id:members)if(!id.equals(store.id()))sendJson(id,j);
+            for(String id:members)if(!id.equals(store.id())&&store.groupApproved(gid,id))sendJson(id,j);
         }catch(Exception ignored){}
     }
     public int sendGroupText(String gid,String name,List<String> members,String mid,String text){
         int count=0;try{JSONObject j=new JSONObject();j.put("type","groupText");j.put("gid",gid);
             j.put("gname",name);j.put("members",idsArray(members));j.put("mid",mid);j.put("body",text);
-            for(String id:members)if(!id.equals(store.id()) && sendJson(id,j))count++;
+            for(String id:members)if(!id.equals(store.id()) && store.groupApproved(gid,id) && sendJson(id,j))count++;
         }catch(Exception ignored){}return count;
     }
     private boolean sendPcm(String id,String type,byte[] pcm){
@@ -454,19 +569,40 @@ public final class LocalNode {
             done.accept(success);
         });
     }
-    public void offerCall(String id){if(isConnected(id)&&activeCall.isEmpty()){activeCall=id;send(id,"callOffer","");}}
+    private void sendCallResume(String id){
+        try{JSONObject j=new JSONObject();j.put("type","callResume");j.put("cid",callSessionId);sendJson(id,j);}
+        catch(Exception ignored){}
+    }
+    private void sendGroupResume(String id){
+        try{JSONObject j=new JSONObject();j.put("type","groupResume");j.put("gid",currentGroup);
+            j.put("cid",callSessionId);sendJson(id,j);}
+        catch(Exception ignored){}
+    }
+    public void offerCall(String id){
+        if(isConnected(id)&&activeCall.isEmpty()){
+            activeCall=id;callSessionId=UUID.randomUUID().toString();
+            try{JSONObject j=new JSONObject();j.put("type","callOffer");j.put("cid",callSessionId);
+                if(!sendJson(id,j))stopAudio();}
+            catch(Exception ignored){stopAudio();}
+        }
+    }
     public void acceptCall(String id){if(id.equals(activeCall)){
-        connectedCallAt=System.currentTimeMillis();send(id,"callAccept","");startAudio(id);
+        if(connectedCallAt==0)connectedCallAt=System.currentTimeMillis();
+        try{JSONObject j=new JSONObject();j.put("type","callAccept");j.put("cid",callSessionId);
+            sendJson(id,j);}catch(Exception ignored){}
+        startAudio(id);
     }}
     public void offerGroupCall(String gid,String name,List<String> members){
         if(isCalling())return;
         List<String> connected=new ArrayList<>();
-        for(String id:members)if(!id.equals(store.id())&&isConnected(id)&&connected.size()<3)connected.add(id);
+        for(String id:members)if(!id.equals(store.id())&&isConnected(id)
+            && store.groupApproved(gid,id)&&connected.size()<3)connected.add(id);
         if(connected.isEmpty())return;
         groupCall=true;currentGroup=gid;activeCall="group:"+gid;connectedCallAt=0;
+        callSessionId=UUID.randomUUID().toString();
         groupCallMembers.clear();groupCallInvited.clear();
         for(String id:connected){
-            try{JSONObject msg=new JSONObject();msg.put("type","groupOffer");msg.put("gid",gid);msg.put("gname",name);
+            try{JSONObject msg=new JSONObject();msg.put("type","groupOffer");msg.put("gid",gid);msg.put("gname",name);msg.put("cid",callSessionId);
                 if(sendJson(id,msg))groupCallInvited.add(id);
             }catch(Exception ignored){}
         }
@@ -485,31 +621,80 @@ public final class LocalNode {
         send(host,"groupLeave","");stopAudio();
     }
     public void rejectCall(String id){send(id,"callEnd","");if(id.equals(activeCall))stopAudio();}
+    private void queueGroupFrame(String id,byte[] pcm){
+        if(pcm==null||pcm.length!=640)return;
+        ArrayBlockingQueue<byte[]> frames=groupAudioFrames.computeIfAbsent(id,k->new ArrayBlockingQueue<>(8));
+        if(!frames.offer(pcm)){
+            frames.poll();frames.offer(pcm); // Drop oldest frame to keep latency bounded.
+        }
+    }
+    private static byte[] mixFrames(Collection<byte[]> frames){
+        byte[] out=new byte[640];if(frames.isEmpty())return out;
+        for(int i=0;i<640;i+=2){
+            int total=0,count=0;
+            for(byte[] frame:frames){
+                if(frame==null||frame.length<640)continue;
+                total+=(short)((frame[i]&0xff)|(frame[i+1]<<8));count++;
+            }
+            int sample=count==0?0:total/Math.max(1,(int)Math.ceil(Math.sqrt(count)));
+            sample=Math.max(-32768,Math.min(32767,sample));
+            out[i]=(byte)sample;out[i+1]=(byte)(sample>>>8);
+        }
+        return out;
+    }
+    private void mixGroupAudio(){
+        if(!groupCall || !activeCall.startsWith("group:") || audio==null)return;
+        Map<String,byte[]> slice=new HashMap<>();
+        for(Map.Entry<String,ArrayBlockingQueue<byte[]>> e:groupAudioFrames.entrySet()){
+            byte[] data=e.getValue().poll();if(data!=null)slice.put(e.getKey(),data);
+        }
+        // Host hears only the other participants. Each guest hears everyone except themselves.
+        List<byte[]> local=new ArrayList<>();
+        for(Map.Entry<String,byte[]> e:slice.entrySet())if(!e.getKey().equals("self"))local.add(e.getValue());
+        if(!local.isEmpty())audio.play(mixFrames(local));
+        for(String participant:groupCallMembers){
+            if(!isConnected(participant))continue;
+            List<byte[]> remote=new ArrayList<>();
+            for(Map.Entry<String,byte[]> e:slice.entrySet())if(!e.getKey().equals(participant))remote.add(e.getValue());
+            if(!remote.isEmpty())sendPcm(participant,"groupPcm",mixFrames(remote));
+        }
+    }
     public synchronized void startAudio(String id){
         if(!id.equals(activeCall)||audio!=null)return;
         try{audio=new AudioEngine(ctx,pcm->{
             if(groupCall){
-                for(String member:groupCallMembers)sendPcm(member,"groupPcm",pcm);
-            }else if(!sendPcm(id,"pcm",pcm)){
-                listener.status("Audio temporalmente interrumpido");
-            }
-        });audio.start();}catch(Exception e){audio=null;listener.status("No se pudo abrir micrófono: "+e.getMessage());endCall();}
+                if(activeCall.startsWith("group:"))queueGroupFrame("self",pcm);
+                else if(isConnected(activeCall))sendPcm(activeCall,"groupPcm",pcm);
+            }else if(isConnected(id))sendPcm(id,"pcm",pcm);
+        });audio.start();
+            if(groupCall && activeCall.startsWith("group:") && groupMixTask==null)
+                groupMixTask=monitor.scheduleAtFixedRate(this::mixGroupAudio,20,20,TimeUnit.MILLISECONDS);
+        }catch(Exception e){audio=null;listener.status("No se pudo abrir micrófono: "+e.getMessage());endCall();}
     }
     public synchronized void stopAudio(){
+        if(groupMixTask!=null){groupMixTask.cancel(false);groupMixTask=null;}
+        groupAudioFrames.clear();
         if(audio!=null){audio.stop();audio=null;}
-        activeCall="";connectedCallAt=0;groupCall=false;currentGroup="";
+        activeCall="";callSessionId="";connectedCallAt=0;groupCall=false;currentGroup="";
         groupCallMembers.clear();groupCallInvited.clear();
     }
     public void mute(boolean yes){if(audio!=null)audio.mute(yes);}
     public void speaker(boolean yes){if(audio!=null)audio.speaker(yes);}
+    private void sendGroupEnd(String id){
+        try{JSONObject msg=new JSONObject();msg.put("type","groupEnd");msg.put("cid",callSessionId);
+            sendJson(id,msg);}catch(Exception ignored){}
+    }
     public void endCall(){
         String id=activeCall;
         if(groupCall){
             if(id.startsWith("group:")){
-                for(String member:groupCallMembers)send(member,"groupEnd","");
-                for(String member:groupCallInvited)send(member,"groupEnd","");
+                for(String member:groupCallMembers)sendGroupEnd(member);
+                for(String member:groupCallInvited)sendGroupEnd(member);
             }else if(!id.isEmpty())send(id,"groupLeave","");
-        }else if(!id.isEmpty())send(id,"callEnd","");
+        }else if(!id.isEmpty()){
+            try{JSONObject m=new JSONObject();m.put("type","callEnd");m.put("cid",callSessionId);sendJson(id,m);}
+            catch(Exception ignored){}
+        }
         stopAudio();
     }
     public synchronized void stop(){

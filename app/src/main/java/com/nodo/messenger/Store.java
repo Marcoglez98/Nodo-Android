@@ -98,14 +98,69 @@ public final class Store {
         p.edit().putString("group_ids",arr.toString()).putString("group_name_"+groupId,name)
             .putString("group_members_"+groupId,m.toString()).apply();
     }
+    /** A group invite never silently enrolls another NODO user. */
+    public synchronized void rememberGroupInvitation(String gid,String name,List<String> members,String inviter){
+        if(gid==null||!gid.matches("[a-f0-9]{32}")||!trusted(inviter)||groups().contains(gid))return;
+        try{
+            JSONObject j=new JSONObject();j.put("name",name);j.put("inviter",inviter);
+            JSONArray ids=new JSONArray();for(String id:members)if(id.matches("[a-f0-9]{32}"))ids.put(id);
+            j.put("members",ids);
+            p.edit().putString("pending_group_"+gid,j.toString()).commit();
+        }catch(Exception ignored){}
+    }
+    public synchronized List<String> pendingGroupInvitations(){
+        List<String> result=new ArrayList<>();
+        for(String key:p.getAll().keySet())if(key.startsWith("pending_group_"))result.add(key.substring(14));
+        return result;
+    }
+    public JSONObject invitation(String gid){
+        try{return new JSONObject(p.getString("pending_group_"+gid,"{}"));}
+        catch(Exception ex){return new JSONObject();}
+    }
+    public synchronized String acceptGroupInvitation(String gid){
+        JSONObject item=invitation(gid);String inviter=item.optString("inviter","");
+        if(!trusted(inviter)||!gid.matches("[a-f0-9]{32}"))return "";
+        List<String> members=new ArrayList<>();JSONArray arr=item.optJSONArray("members");
+        if(arr==null)return "";
+        for(int i=0;i<arr.length();i++)members.add(arr.optString(i));
+        if(!members.contains(id())||!members.contains(inviter))return "";
+        ensureGroup(gid,item.optString("name","Grupo NODO"),members);
+        p.edit().remove("pending_group_"+gid).putString("group_owner_"+gid,inviter)
+            .putBoolean("group_joined_"+gid+"_"+id(),true).apply();
+        return inviter;
+    }
+    public synchronized void declineGroupInvitation(String gid){
+        p.edit().remove("pending_group_"+gid).apply();
+    }
+    public boolean groupDeclined(String gid,String userId){
+        return p.getBoolean("group_declined_"+gid+"_"+userId,false);
+    }
+    public void groupDeclined(String gid,String userId){
+        p.edit().putBoolean("group_declined_"+gid+"_"+userId,true).apply();
+    }
+    public boolean groupApproved(String gid,String userId){
+        return userId.equals(id())&&groups().contains(gid)
+            || p.getBoolean("group_joined_"+gid+"_"+userId,false);
+    }
+    public void groupApproved(String gid,String userId,boolean approved){
+        p.edit().putBoolean("group_joined_"+gid+"_"+userId,approved).apply();
+    }
     public synchronized String createGroup(String name,List<String> members){
         String id=UUID.randomUUID().toString().replace("-","");
-        ensureGroup(id,name,members);return id;
+        ensureGroup(id,name,members);groupApproved(id,id(),true);
+        p.edit().putString("group_owner_"+id,id()).apply();return id;
     }
     public synchronized List<String> groups(){
         List<String> ids=new ArrayList<>();
         try{JSONArray a=new JSONArray(p.getString("group_ids","[]"));for(int i=0;i<a.length();i++)ids.add(a.getString(i));}
         catch(Exception ignored){}return ids;
+    }
+    public String groupOwner(String gid){return p.getString("group_owner_"+gid,"");}
+    public synchronized boolean addGroupMember(String gid,String id){
+        if(!groupOwner(gid).equals(id())||!trusted(id)||!groups().contains(gid))return false;
+        List<String> members=groupMembers(gid);
+        if(members.contains(id))return false;
+        members.add(id);ensureGroup(gid,groupName(gid),members);return true;
     }
     public String groupName(String id){return p.getString("group_name_"+id,"Grupo NODO");}
     public List<String> groupMembers(String id){

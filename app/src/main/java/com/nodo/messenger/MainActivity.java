@@ -72,7 +72,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     private String screen="discover",currentPeer="",callPeer="",networkStatus="Iniciando red local…",micAction="";
     private boolean recording=false,recordingPaused=false,muted=false,loud=false,foreground=false,callDialogOpen=false;
     private long recordingStart=0L,recordedMs=0L;
-    private TextView callTimerLabel;
+    private TextView callTimerLabel,callStatusLabel;
     private Runnable callTimer;
     private String groupCaller="",groupCallerId="";
     private String pendingCaller="";
@@ -110,6 +110,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
     @Override protected void onResume(){
         super.onResume();foreground=true;
         NodeUpdater.onResume(this);
+        handler.postDelayed(this::showPendingGroupInvitations,500);
         if(nodoService!=null){
             nodoService.attach(this);
             String pending=nodoService.pendingCaller();
@@ -165,6 +166,36 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
             if(screen.equals("chat")&&currentPeer.equals("group:"+gid)&&foreground)refreshChatMessages();
             else if(foreground)NodeAlerts.message(this,store,"group:"+gid,name,p.name+": "+body);
         });
+    }
+    @Override public void groupInvitation(LocalNode.Peer peer,String gid,String name,List<String> members){
+        ui(()->{if(foreground)showPendingGroupInvitations();else toast("Nueva invitación de grupo");});
+    }
+    @Override public void groupJoined(LocalNode.Peer peer,String gid){
+        ui(()->{if(screen.equals("chats")||screen.equals("chat"))render();});
+    }
+    @Override public void groupMemberKnown(LocalNode.Peer peer,String gid,String joinedId){
+        ui(()->{if(screen.equals("chat")||screen.equals("chats"))render();});
+    }
+    @Override public void callConnectionChanged(){ui(()->{
+        if(screen.equals("call"))updateCallTime();
+    });}
+    private boolean invitationDialogShown=false;
+    private void showPendingGroupInvitations(){
+        if(invitationDialogShown || store==null || nodoService==null)return;
+        List<String> pending=store.pendingGroupInvitations();
+        if(pending.isEmpty())return;
+        final String gid=pending.get(0);JSONObject invitation=store.invitation(gid);
+        String name=invitation.optString("name","Grupo NODO");
+        String inviter=invitation.optString("inviter","");
+        if(inviter.isEmpty())return;
+        invitationDialogShown=true;
+        new AlertDialog.Builder(this).setTitle("Invitación al grupo «"+name+"»")
+            .setMessage(store.peerName(inviter)+" solicita agregarte. Puedes aceptar o rechazar; nunca ingresarás automáticamente.")
+            .setPositiveButton("Unirme",(dialog,which)->nodoService.answerGroupInvitation(gid,true))
+            .setNegativeButton("Rechazar",(dialog,which)->nodoService.answerGroupInvitation(gid,false))
+            .setOnDismissListener(dialog->{invitationDialogShown=false;
+                handler.postDelayed(this::showPendingGroupInvitations,250);
+            }).show();
     }
     @Override public void groupKnown(LocalNode.Peer p,String gid,String name,List<String> members){ui(()->{
         if(screen.equals("chats"))render();
@@ -458,7 +489,13 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         }
         body.addView(filters);gap(body,16);
         TextView create=pill("＋ Nuevo grupo",true);
-        create.setOnClickListener(w->createGroupDialog());body.addView(create);gap(body,15);
+        create.setOnClickListener(w->createGroupDialog());body.addView(create);gap(body,8);
+        List<String> invitations=store.pendingGroupInvitations();
+        if(!invitations.isEmpty()){
+            TextView pending=pill("✉ "+invitations.size()+" invitación(es) pendiente(s)",false);
+            pending.setOnClickListener(w->showPendingGroupInvitations());body.addView(pending);gap(body,8);
+        }
+        gap(body,7);
         int listed=0;
         if(chatFilter.equals("all"))for(String gid:store.groups()){
             String id="group:"+gid;LinearLayout row=contactRow(id);
@@ -490,7 +527,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         EditText groupName=new EditText(this);groupName.setSingleLine(true);
         groupName.setHint("Nombre del grupo");groupName.setText("Mi grupo NODO");
         LinearLayout layout=v();pad(layout,20,7,20,5);
-        layout.addView(txt("Elige las personas que quieres agregar. Se enlazan automáticamente cuando ya estén autorizadas y cerca.",13,MUTED,false));gap(layout,7);
+        layout.addView(txt("Elige contactos autorizados. Cada persona recibirá una invitación y deberá aceptar para unirse al grupo.",13,MUTED,false));gap(layout,7);
         layout.addView(groupName);
         new AlertDialog.Builder(this).setTitle("Nuevo grupo")
             .setView(layout).setMultiChoiceItems(names,selected,(dialog,index,on)->selected[index]=on)
@@ -502,6 +539,28 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
                 String gid=store.createGroup(title,members);
                 if(nodoService!=null)nodoService.announceGroup(gid);
                 currentPeer="group:"+gid;screen="chat";render();
+            }).setNegativeButton("Cancelar",null).show();
+    }
+    private void addMemberToGroup(String gid){
+        if(!store.groupOwner(gid).equals(store.id())){
+            toast("Solo quien creó el grupo puede invitar personas en esta versión");return;
+        }
+        List<String> eligible=new ArrayList<>();
+        for(String contact:store.contacts())if(store.trusted(contact)&&!store.groupMembers(gid).contains(contact))eligible.add(contact);
+        if(eligible.isEmpty()){toast("No tienes otros contactos autorizados para invitar");return;}
+        String[] names=new String[eligible.size()];boolean[] chosen=new boolean[eligible.size()];
+        for(int i=0;i<eligible.size();i++)names[i]=store.peerName(eligible.get(i));
+        new AlertDialog.Builder(this).setTitle("Invitar contactos a "+store.groupName(gid))
+            .setMessage("Los participantes recibirán una solicitud y deberán aceptarla")
+            .setMultiChoiceItems(names,chosen,(dialog,index,checked)->chosen[index]=checked)
+            .setPositiveButton("Enviar invitaciones",(dialog,which)->{
+                int invited=0;
+                for(int i=0;i<eligible.size();i++)if(chosen[i]&&store.addGroupMember(gid,eligible.get(i)))invited++;
+                if(invited>0){
+                    if(nodoService!=null)nodoService.announceGroup(gid);
+                    toast(invited+" solicitud(es) listas. Se enviarán cuando estén conectados.");
+                    render();
+                }
             }).setNegativeButton("Cancelar",null).show();
     }
     private void showOnlineOnly(){
@@ -585,7 +644,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         settingsRow(body,"◐","Apariencia","Estilo original blanco y menta",()->info("Apariencia","NODO utiliza el diseño blanco, verde menta y azul elegido. Temas adicionales vendrán después."));
         settingsRow(body,"?","Ayuda","Cómo conectar dos Android",this::help);
         settingsRow(body,"↗","Invitar amigos","Compartir información sobre NODO",this::shareInvite);
-        gap(body,14);body.addView(txt("NODO Beta v0.8.0 · Versión experimental · Comunicaciones sin cifrado de extremo a extremo. Solo para pruebas.",12,MUTED,false));
+        gap(body,14);body.addView(txt("NODO Beta v0.9.0 · Versión experimental · Comunicaciones sin cifrado de extremo a extremo. Solo para pruebas.",12,MUTED,false));
     }
     private void settingsRow(LinearLayout body,String icon,String name,String sub,Runnable action){
         LinearLayout c=card();LinearLayout row=h();
@@ -609,6 +668,12 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
                 boolean status=!chats.favorite(currentPeer);chats.favorite(currentPeer,status);
                 favorite.setText(status?"★":"☆");toast(status?"Añadido a Favoritos":"Eliminado de Favoritos");
             });bar.addView(favorite);
+        }
+        if(store.isGroup(currentPeer)){
+            TextView add=glyph("＋",GREEN,24);pad(add,6,5,6,5);
+            add.setContentDescription("Invitar nuevo miembro al grupo");
+            add.setOnClickListener(w->addMemberToGroup(currentPeer.substring(6)));
+            bar.addView(add);
         }
         TextView call=glyph("☎",GREEN,24);pad(call,7,5,7,5);
         call.setOnClickListener(w->{if(store.isGroup(currentPeer))startGroupCall(currentPeer.substring(6));else call(currentPeer);});bar.addView(call);
@@ -1070,6 +1135,11 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         if(callTimerLabel==null||node==null||!screen.equals("call"))return;
         long sec=node.callDuration();
         callTimerLabel.setText(sec<0?"Esperando respuesta…":String.format(Locale.getDefault(),"%02d:%02d:%02d",sec/3600,(sec/60)%60,sec%60));
+        if(callStatusLabel!=null){
+            if(node.isCallReconnecting())callStatusLabel.setText("⟳ Reconectando… sesión en espera");
+            else if(sec>=0)callStatusLabel.setText("● En llamada · Wi-Fi local");
+            else callStatusLabel.setText("◉ Conectando · Wi-Fi local");
+        }
     }
 
     private void showCall(){
@@ -1078,7 +1148,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         title.setGravity(Gravity.CENTER);
         top.addView(title,new LinearLayout.LayoutParams(0,-2,1));root.addView(top);
         LinearLayout center=v();center.setGravity(Gravity.CENTER);pad(center,20,25,20,20);
-        TextView status=pill("◉ Conexión por Wi-Fi local",true);center.addView(status);
+        callStatusLabel=pill("◉ Conexión por Wi-Fi local",true);center.addView(callStatusLabel);
         gap(center,35);center.addView(avatar(callPeer,150));gap(center,18);
         TextView person=txt(store.peerName(callPeer),25,DARK,true);person.setGravity(Gravity.CENTER);center.addView(person);
         gap(center,8);

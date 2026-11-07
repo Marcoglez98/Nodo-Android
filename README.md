@@ -1,3 +1,5 @@
+# NODO Beta 0.9.0 — Sesiones recuperables y grupos con invitación
+
 # NODO Beta 0.8 — Zona Wi-Fi sin internet
 
 NODO puede crear una **zona Wi-Fi local** desde el teléfono Android servidor, sin router y sin datos de internet. Utiliza `WifiManager.startLocalOnlyHotspot` (Android 8+). Otros Android pueden unirse con el nombre y clave que muestra la aplicación.
@@ -26,3 +28,6 @@ Funciones implementadas:
 4. Abrir NODO en todos, autorizar nuevos contactos y enviar mensajes.
 5. Si no aparecen: conectar manualmente por IP y puerto mostrados en servidor.
 6. Bloquear pantallas y comprobar recepción, luego probar llamada de voz.
+
+
+**Nueva versión**: llamadas individuales y grupales sin finalizar automáticamente al perder Wi-Fi; reanudación de sesión al recuperar la conexión y mientras el servicio siga activo; solicitudes explícitas para pertenecer a un grupo; participantes aceptados únicamente. El contador permanece activo durante la reconexión. Pruebas reales imprescindibles.
