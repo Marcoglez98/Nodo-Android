@@ -318,7 +318,7 @@ public final class LocalNode {
                 }else if(type.equals("groupDecline")){
                     String gid=m.optString("gid","");
                     if(gid.matches("[a-f0-9]{32}")&&store.groups().contains(gid))
-                        store.groupDeclined(gid,cn.peer.id);
+                        store.markGroupDeclined(gid,cn.peer.id);
                 }else if(type.equals("groupMemberJoined")){
                     String gid=m.optString("gid","");String member=m.optString("id","");
                     if(gid.matches("[a-f0-9]{32}")&&member.matches("[a-f0-9]{32}")
