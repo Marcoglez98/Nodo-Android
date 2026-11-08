@@ -1,7 +1,7 @@
 {
-  "versionCode": 91,
-  "versionName": "0.9.1-beta",
-  "notes": "Zona NODO personalizable: guarda nombre y contraseña de Wi-Fi protegida con Android Keystore. Si el dispositivo es compatible, intenta crear una red local con esos datos. Si Android no lo permite, abre los ajustes del punto de acceso; continúa disponible la zona local automática sin internet. NODO sigue funcionando por Wi-Fi local.",
-  "apkUrl": "https://raw.githubusercontent.com/Marcoglez98/Nodo-Android/nodo-modular-v06/downloads/NODO-Beta-v0.9.1.apk",
-  "sha256": "fd2ec12e5aabc69a233b97a83e5e120890b7aefd9291cf6163a156d09840a2b0"
+  "versionCode": 92,
+  "versionName": "0.9.2-beta",
+  "notes": "Ahora puedes vaciar mensajes, eliminar conversaciones y salir/eliminar grupos desde los tres puntos de cada chat o manteniendo pulsado. Confirmación antes de borrar. Los contactos autorizados y archivos descargados se conservan. Los mensajes de otras personas no se borran.",
+  "apkUrl": "https://raw.githubusercontent.com/Marcoglez98/Nodo-Android/nodo-modular-v06/downloads/NODO-Beta-v0.9.2.apk",
+  "sha256": "8a5cbba4197826951bc8227f5dbb273723c9cd7ebce3dd4422a02b08af49a62b"
 }
