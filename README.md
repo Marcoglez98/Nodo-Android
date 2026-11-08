@@ -1,3 +1,12 @@
+# NODO Beta 0.9.2 — Administración de conversaciones y grupos
+
+- Menú ⋮ y pulsación larga para **Vaciar mensajes** o **Eliminar conversación**.
+- **Salir y eliminar grupo** borra su información en el dispositivo actual, pero no la de otros miembros.
+- Confirmaciones antes de borrar; los archivos recibidos no se borran físicamente.
+- Al recibir un mensaje nuevo de un contacto eliminado, la conversación vuelve a aparecer.
+- Se conserva el contacto autorizado y los ajustes generales, y el grupo eliminado no se reincorpora solo.
+- Firma y versión deben permanecer compatibles con NODO Beta 0.9.1.
+
 # NODO Beta 0.9.1 — Zona Wi-Fi personalizable
 
 Se ha añadido a **Descubrir → Crear zona Wi-Fi sin internet** un formulario para elegir y guardar el **nombre (SSID)** y **contraseña (WPA2)** que deseas usar.

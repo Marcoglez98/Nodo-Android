@@ -401,6 +401,19 @@ public final class NodoService extends Service implements LocalNode.Listener {
         if(ui!=null)main.post(ui::callConnectionChanged);
         main.post(this::updateNotification);
     }
+    /** Local removal: stops retaining a deleted group; other devices keep their history. */
+    void leaveGroup(String gid){
+        if(node!=null && node.groupCallActive() && gid.equals(node.activeGroupId())){
+            node.endCall();captureMicrophone(false);
+        }
+        String owner=store.groupOwner(gid);
+        if(node!=null && !owner.isEmpty() && !owner.equals(store.id()))
+            node.sendGroupDecline(owner,gid);
+        store.deleteGroupLocally(gid);
+        LocalNode.Listener ui=uiListener;
+        if(ui!=null)main.post(ui::changed);
+    }
+
     void answerGroupInvitation(String gid,boolean accepted){
         JSONObject invite=store.invitation(gid);
         String inviter=invite.optString("inviter","");

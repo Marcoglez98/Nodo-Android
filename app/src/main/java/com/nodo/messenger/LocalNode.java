@@ -177,7 +177,7 @@ public final class LocalNode {
                             String peerId=store.matchShort(d.shortId());
                             // Only one side initiates reconnect to avoid two competing sockets.
                             if(peerId!=null && store.autoConnect() && !isConnected(peerId)
-                                && (store.id().compareTo(peerId)<0 || (lastContactLost.containsKey(peerId)&&System.currentTimeMillis()-lastContactLost.get(peerId)>18000)))connect(d);
+                                && (store.id().compareTo(peerId)<0 || System.currentTimeMillis()-lastContactLost.getOrDefault(peerId,0L)>18000))connect(d);
                         }
                     });}catch(Exception ex){listener.status("Descubrimiento: "+ex.getMessage());}
                 }
@@ -217,7 +217,7 @@ public final class LocalNode {
                     for(Discovered d:nearby.values()){
                         String id=store.matchShort(d.shortId());
                         if(id!=null && store.autoConnect() && !isConnected(id)
-                            && (store.id().compareTo(id)<0 || (lastContactLost.containsKey(id)&&now-lastContactLost.get(id)>18000)))connect(d);
+                            && (store.id().compareTo(id)<0 || now-lastContactLost.getOrDefault(id,0L)>18000))connect(d);
                     }
                 }
 
@@ -311,14 +311,14 @@ public final class LocalNode {
                         listener.groupKnown(cn.peer,gid,m.optString("gname"),idsFrom(m.optJSONArray("members")));
                 }else if(type.equals("groupInvite")){
                     String gid=m.optString("gid");List<String> members=idsFrom(m.optJSONArray("members"));
-                    if(store.trusted(cn.peer.id)&&gid.matches("[a-f0-9]{32}")&&members.contains(store.id())&&members.contains(cn.peer.id)){
+                    if(store.trusted(cn.peer.id)&&gid.matches("[a-f0-9]{32}")&&!store.groupLeft(gid)&&members.contains(store.id())&&members.contains(cn.peer.id)){
                         if(store.groups().contains(gid))sendGroupJoin(cn.peer.id,gid);
                         else listener.groupInvitation(cn.peer,gid,m.optString("gname","Grupo NODO"),members);
                     }
                 }else if(type.equals("groupDecline")){
                     String gid=m.optString("gid","");
                     if(gid.matches("[a-f0-9]{32}")&&store.groups().contains(gid))
-                        store.markGroupDeclined(gid,cn.peer.id);
+                        store.groupDeclined(gid,cn.peer.id);
                 }else if(type.equals("groupMemberJoined")){
                     String gid=m.optString("gid","");String member=m.optString("id","");
                     if(gid.matches("[a-f0-9]{32}")&&member.matches("[a-f0-9]{32}")

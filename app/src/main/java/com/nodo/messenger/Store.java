@@ -88,9 +88,42 @@ public final class Store {
     public synchronized JSONArray messages(String peer){
         try{return new JSONArray(p.getString("messages_"+peer,"[]"));}catch(Exception ex){return new JSONArray();}
     }
+    /** A removed chat is hidden from the conversation list, but the trusted peer is kept. */
+    public boolean chatHidden(String peer){return p.getBoolean("chat_hidden_"+peer,false);}
+    public void restoreChat(String peer){p.edit().remove("chat_hidden_"+peer).apply();}
+
+    /** Delete only this device's conversation; the remote device retains its own data. */
+    public synchronized void deleteConversation(String peer){
+        if(peer==null || peer.isEmpty() || isGroup(peer))return;
+        p.edit().remove("messages_"+peer).remove("lastread_"+peer)
+            .remove("favorite_"+peer).putBoolean("chat_hidden_"+peer,true).commit();
+    }
+
+    /** Avoid silently re-enrolling after leaving a group. A new invite must be explicit. */
+    public boolean groupLeft(String gid){return p.getBoolean("group_left_"+gid,false);}
+
+    /** Leave a group and remove local group metadata/history, without affecting other users' phones. */
+    public synchronized boolean deleteGroupLocally(String gid){
+        if(gid==null || !gid.matches("[a-f0-9]{32}") || !groups().contains(gid))return false;
+        JSONArray active=new JSONArray();
+        for(String key:groups())if(!gid.equals(key))active.put(key);
+        SharedPreferences.Editor e=p.edit();
+        e.putString("group_ids",active.toString())
+         .putBoolean("group_left_"+gid,true)
+         .remove("messages_group:"+gid)
+         .remove("lastread_group:"+gid)
+         .remove("pending_group_"+gid)
+         .remove("group_name_"+gid)
+         .remove("group_owner_"+gid)
+         .remove("group_members_"+gid);
+        for(String key:p.getAll().keySet())if(key.startsWith("group_joined_"+gid+"_")
+            ||key.startsWith("group_declined_"+gid+"_"))e.remove(key);
+        return e.commit();
+    }
+
     public boolean isGroup(String peer){return peer!=null && peer.startsWith("group:");}
     public synchronized void ensureGroup(String groupId,String name,List<String> members){
-        if(groupId==null || !groupId.matches("[a-f0-9]{32}"))return;
+        if(groupId==null || !groupId.matches("[a-f0-9]{32}") || groupLeft(groupId))return;
         List<String> ids=groups();
         if(!ids.contains(groupId))ids.add(groupId);
         JSONArray arr=new JSONArray();for(String id:ids)arr.put(id);
@@ -100,7 +133,7 @@ public final class Store {
     }
     /** A group invite never silently enrolls another NODO user. */
     public synchronized void rememberGroupInvitation(String gid,String name,List<String> members,String inviter){
-        if(gid==null||!gid.matches("[a-f0-9]{32}")||!trusted(inviter)||groups().contains(gid))return;
+        if(gid==null||!gid.matches("[a-f0-9]{32}")||!trusted(inviter)||groups().contains(gid)||groupLeft(gid))return;
         try{
             JSONObject j=new JSONObject();j.put("name",name);j.put("inviter",inviter);
             JSONArray ids=new JSONArray();for(String id:members)if(id.matches("[a-f0-9]{32}"))ids.put(id);
@@ -119,7 +152,7 @@ public final class Store {
     }
     public synchronized String acceptGroupInvitation(String gid){
         JSONObject item=invitation(gid);String inviter=item.optString("inviter","");
-        if(!trusted(inviter)||!gid.matches("[a-f0-9]{32}"))return "";
+        if(!trusted(inviter)||!gid.matches("[a-f0-9]{32}")||groupLeft(gid))return "";
         List<String> members=new ArrayList<>();JSONArray arr=item.optJSONArray("members");
         if(arr==null)return "";
         for(int i=0;i<arr.length();i++)members.add(arr.optString(i));
@@ -135,7 +168,7 @@ public final class Store {
     public boolean groupDeclined(String gid,String userId){
         return p.getBoolean("group_declined_"+gid+"_"+userId,false);
     }
-    public void markGroupDeclined(String gid,String userId){
+    public void groupDeclined(String gid,String userId){
         p.edit().putBoolean("group_declined_"+gid+"_"+userId,true).apply();
     }
     public boolean groupApproved(String gid,String userId){
@@ -177,11 +210,12 @@ public final class Store {
         }
         JSONObject m=newMessage(false,kind,body,path,name,true);
         try{m.put("mid",mid);}catch(Exception ignored){}
-        a.put(m);p.edit().putString("messages_"+peer,a.toString()).commit();return true;
+        a.put(m);p.edit().putString("messages_"+peer,a.toString())
+            .remove("chat_hidden_"+peer).commit();return true;
     }
     public synchronized void saveMessage(String peer,JSONObject msg){
         JSONArray a=messages(peer); a.put(msg);
-        p.edit().putString("messages_"+peer,a.toString()).apply();
+        p.edit().putString("messages_"+peer,a.toString()).remove("chat_hidden_"+peer).apply();
     }
     public synchronized void markSent(String peer,String mid){
         JSONArray a=messages(peer);

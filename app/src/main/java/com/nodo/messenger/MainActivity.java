@@ -528,7 +528,8 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
             }).setNegativeButton("Cancelar",null).show();
     }
     private void showChats(LinearLayout body){
-        title(body,"Chats","Tus conversaciones y grupos sin depender de internet");gap(body,15);
+        title(body,"Chats","Tus conversaciones y grupos sin depender de internet");gap(body,6);
+        body.addView(txt("Toca ⋮ o mantén pulsada una conversación para eliminarla.",12,MUTED,false));gap(body,15);
         LinearLayout shortcuts=h();
         String[] actions={"Mensajes","Llamadas","Archivos"};
         for(int i=0;i<actions.length;i++){
@@ -561,14 +562,18 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         gap(body,7);
         int listed=0;
         if(chatFilter.equals("all"))for(String gid:store.groups()){
-            String id="group:"+gid;LinearLayout row=contactRow(id);
-            row.setOnClickListener(w->openChat(id));body.addView(row);gap(body,9);listed++;
+            String id="group:"+gid;LinearLayout row=contactRow(id,true);
+            row.setOnClickListener(w->openChat(id));
+            row.setOnLongClickListener(w->{showConversationActions(id);return true;});body.addView(row);gap(body,9);listed++;
         }
         for(String id:store.contacts()){
+            if(store.chatHidden(id))continue;
             if(chatFilter.equals("near")&&!node.isConnected(id))continue;
             if(chatFilter.equals("favorites")&&!chats.favorite(id))continue;
-            LinearLayout row=contactRow(id);
-            row.setOnClickListener(w->openChat(id));body.addView(row);gap(body,9);listed++;
+            LinearLayout row=contactRow(id,true);
+            row.setOnClickListener(w->openChat(id));
+            row.setOnLongClickListener(w->{showConversationActions(id);return true;});
+            body.addView(row);gap(body,9);listed++;
         }
         if(listed==0){
             LinearLayout empty=card();
@@ -633,7 +638,8 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
             .setPositiveButton("Cerrar",null).show();
     }
     private void gapHorizontal(LinearLayout l,int width){l.addView(new View(this),lp(width,1));}
-    private LinearLayout contactRow(String id){
+    private LinearLayout contactRow(String id){return contactRow(id,false);}
+    private LinearLayout contactRow(String id,boolean showOptions){
         LinearLayout outer=card();LinearLayout row=h();row.addView(avatar(id,52));
         LinearLayout desc=v();pad(desc,13,0,7,0);
         LinearLayout heading=h();heading.addView(txt(store.peerName(id),16,DARK,true),new LinearLayout.LayoutParams(0,-2,1));
@@ -658,7 +664,15 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
             state.addView(count,lp(28,26));gap(state,5);
         }
         state.addView(txt(connected?"●":"○",18,connected?GREEN:MUTED,true));
-        row.addView(state);outer.addView(row);return outer;
+        row.addView(state);
+        if(showOptions){
+            TextView more=glyph("⋮",MUTED,26);
+            more.setContentDescription("Opciones de "+store.peerName(id));
+            pad(more,12,4,3,4);
+            more.setOnClickListener(w->showConversationActions(id));
+            row.addView(more);
+        }
+        outer.addView(row);return outer;
     }
     private void showCalls(LinearLayout body){
         title(body,"Llamadas","Voz por Wi-Fi local con personas enlazadas");gap(body,13);
@@ -696,7 +710,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         p.addView(txt("✎",23,GREEN,true));profile.addView(p);profile.setOnClickListener(w->editProfile());body.addView(profile);gap(body,14);
         settingsRow(body,"◉","Cuenta y perfil","Foto, nombre y estado",this::editProfile);
         settingsRow(body,"♧","Privacidad","Enlaces autorizados y contactos",this::privacySettings);
-        settingsRow(body,"☷","Chats","Exportar conversación o borrar mensajes",this::chatSettings);
+        settingsRow(body,"☷","Chats","Exportar, eliminar conversaciones o salir de grupos",this::chatSettings);
         settingsRow(body,"◈","Notificaciones y sonidos","Tonos de mensajes y llamadas",this::notificationSettings);
         settingsRow(body,"◎","Conectividad","Reconexión y tecnología de red",this::connectivitySettings);
         settingsRow(body,"◉","Zona Wi-Fi NODO","Crear red sin internet para otros teléfonos",this::showOfflineHotspotDialog);
@@ -707,7 +721,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         settingsRow(body,"◐","Apariencia","Estilo original blanco y menta",()->info("Apariencia","NODO utiliza el diseño blanco, verde menta y azul elegido. Temas adicionales vendrán después."));
         settingsRow(body,"?","Ayuda","Cómo conectar dos Android",this::help);
         settingsRow(body,"↗","Invitar amigos","Compartir información sobre NODO",this::shareInvite);
-        gap(body,14);body.addView(txt("NODO Beta v0.9.0 · Versión experimental · Comunicaciones sin cifrado de extremo a extremo. Solo para pruebas.",12,MUTED,false));
+        gap(body,14);body.addView(txt("NODO Beta v0.9.2 · Versión experimental · Comunicaciones sin cifrado de extremo a extremo. Solo para pruebas.",12,MUTED,false));
     }
     private void settingsRow(LinearLayout body,String icon,String name,String sub,Runnable action){
         LinearLayout c=card();LinearLayout row=h();
@@ -716,7 +730,7 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         row.addView(content,new LinearLayout.LayoutParams(0,-2,1));row.addView(txt("›",23,MUTED,false));c.addView(row);
         c.setOnClickListener(w->action.run());body.addView(c);gap(body,8);
     }
-    private void openChat(String id){currentPeer=id;screen="chat";chats.markRead(id);render();}
+    private void openChat(String id){if(!store.isGroup(id))store.restoreChat(id);currentPeer=id;screen="chat";chats.markRead(id);render();}
     private void showChat(){
         LinearLayout bar=h();pad(bar,10,10,14,10);bar.setBackgroundColor(Color.WHITE);bar.setElevation(dp(4));
         TextView back=glyph("‹",DARK,32);pad(back,4,0,10,0);back.setOnClickListener(w->{screen="chats";render();});bar.addView(back);
@@ -738,6 +752,9 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
             add.setOnClickListener(w->addMemberToGroup(currentPeer.substring(6)));
             bar.addView(add);
         }
+        TextView options=glyph("⋮",MUTED,25);pad(options,8,5,7,5);
+        options.setContentDescription("Opciones de conversación");
+        options.setOnClickListener(w->showConversationActions(currentPeer));bar.addView(options);
         TextView call=glyph("☎",GREEN,24);pad(call,7,5,7,5);
         call.setOnClickListener(w->{if(store.isGroup(currentPeer))startGroupCall(currentPeer.substring(6));else call(currentPeer);});bar.addView(call);
         TextView video=glyph("▣",GREEN,23);pad(video,7,5,3,5);video.setOnClickListener(w->featurePending("Videollamadas"));bar.addView(video);
@@ -1381,27 +1398,91 @@ public final class MainActivity extends Activity implements LocalNode.Listener {
         new AlertDialog.Builder(this).setTitle("Conectividad NODO").setView(layout)
             .setPositiveButton("Guardar",null).show();
     }
-    private void chatSettings(){
-        List<String> ids=store.contacts();String[] opts={"Exportar una conversación como texto","Borrar mensajes de un contacto"};
-        new AlertDialog.Builder(this).setTitle("Chats").setItems(opts,(x,choice)->{
-            if(ids.isEmpty()){toast("Aún no tienes contactos");return;}
-            String[] names=new String[ids.size()];for(int i=0;i<ids.size();i++)names[i]=store.peerName(ids.get(i));
-            new AlertDialog.Builder(this).setTitle("Seleccionar contacto").setItems(names,(y,k)->{
-                String id=ids.get(k);
+    private void showConversationActions(String id){
+        if(id==null || id.isEmpty())return;
+        boolean group=store.isGroup(id);
+        String[] options=group?new String[]{"Vaciar mensajes", "Salir y eliminar grupo"}
+            :new String[]{"Vaciar mensajes", "Eliminar conversación"};
+        new AlertDialog.Builder(this).setTitle(store.peerName(id))
+            .setItems(options,(dialog,choice)->{
                 if(choice==0){
-                    StringBuilder sb=new StringBuilder("Conversación NODO con "+store.peerName(id)+"\n\n");JSONArray arr=store.messages(id);
-                    for(int j=0;j<arr.length();j++){
-                        JSONObject m=arr.optJSONObject(j);if(m!=null){sb.append(m.optBoolean("out")?"Yo: ":store.peerName(id)+": ")
-                            .append(m.optString("kind").equals("text")?m.optString("body"):"["+m.optString("name")+"]").append("\n");}
-                    }
-                    Intent share=new Intent(Intent.ACTION_SEND);share.setType("text/plain");share.putExtra(Intent.EXTRA_TEXT,sb.toString());
-                    startActivity(Intent.createChooser(share,"Exportar conversación"));
-                }else new AlertDialog.Builder(this).setTitle("Eliminar mensajes")
-                    .setMessage("Se borrará el historial local de "+store.peerName(id)+". Los archivos físicos permanecen almacenados.")
-                    .setPositiveButton("Borrar",(z,t)->{store.clearMessages(id);render();toast("Historial borrado");})
-                    .setNegativeButton("Cancelar",null).show();
+                    new AlertDialog.Builder(this).setTitle("Vaciar mensajes")
+                        .setMessage("Se borrarán los mensajes de «"+store.peerName(id)+"» en este teléfono. La conversación o el grupo seguirá disponible. Los archivos descargados permanecen guardados.")
+                        .setNegativeButton("Cancelar",null)
+                        .setPositiveButton("Vaciar",(d,x)->{
+                            store.clearMessages(id);chatCount=-1;
+                            if(screen.equals("chat")&&currentPeer.equals(id))refreshChatMessages();
+                            else render();
+                            toast("Mensajes borrados");
+                        }).show();
+                    return;
+                }
+                if(group){
+                    String gid=id.substring(6);
+                    boolean creator=store.id().equals(store.groupOwner(gid));
+                    new AlertDialog.Builder(this).setTitle("Salir y eliminar grupo")
+                        .setMessage("¿Salir de «"+store.groupName(gid)+"» y borrar su conversación en este teléfono? "
+                            +(creator?"Los otros participantes conservarán sus mensajes y su copia del grupo.":"El creador del grupo será informado si está conectado. ")
+                            +"Los archivos descargados no se eliminarán.")
+                        .setNegativeButton("Cancelar",null)
+                        .setPositiveButton("Salir y eliminar",(d,x)->{
+                            if(nodoService!=null)nodoService.leaveGroup(gid);
+                            else {
+                                String owner=store.groupOwner(gid);
+                                if(node!=null&&!owner.isEmpty()&&!owner.equals(store.id()))
+                                    node.sendGroupDecline(owner,gid);
+                                store.deleteGroupLocally(gid);
+                            }
+                            closeDeletedChat(id);
+                            toast("Grupo eliminado de este teléfono");
+                        }).show();
+                }else{
+                    new AlertDialog.Builder(this).setTitle("Eliminar conversación")
+                        .setMessage("¿Borrar toda la conversación con «"+store.peerName(id)+"» y quitarla de tu lista de Chats? "
+                            +"El contacto seguirá autorizado y podrá escribirte de nuevo. "
+                            +"Los mensajes de su teléfono y los archivos descargados no se eliminarán.")
+                        .setNegativeButton("Cancelar",null)
+                        .setPositiveButton("Eliminar",(d,x)->{
+                            store.deleteConversation(id);closeDeletedChat(id);
+                            toast("Conversación eliminada");
+                        }).show();
+                }
+            }).setNegativeButton("Cancelar",null).show();
+    }
+    private void closeDeletedChat(String id){
+        if(currentPeer.equals(id)&&screen.equals("chat")){
+            stopVoicePlayback();
+            if(recording)stopRecorder(false);
+            currentPeer="";screen="chats";chatCount=-1;
+        }
+        render();
+    }
+    private void chatSettings(){
+        String[] opts={"Exportar conversación como texto", "Administrar conversaciones y grupos"};
+        new AlertDialog.Builder(this).setTitle("Administrar chats")
+            .setItems(opts,(dlg,choice)->{
+                List<String> ids=new ArrayList<>();
+                for(String id:store.contacts())if(!store.chatHidden(id))ids.add(id);
+                for(String gid:store.groups())ids.add("group:"+gid);
+                if(ids.isEmpty()){toast("Todavía no hay conversaciones para administrar");return;}
+                String[] labels=new String[ids.size()];
+                for(int i=0;i<ids.size();i++)labels[i]=store.isGroup(ids.get(i))?"👥 "+store.peerName(ids.get(i)):store.peerName(ids.get(i));
+                new AlertDialog.Builder(this).setTitle("Elige una conversación")
+                    .setItems(labels,(whichDialog,k)->{
+                        String id=ids.get(k);
+                        if(choice==1){showConversationActions(id);return;}
+                        StringBuilder output=new StringBuilder("Conversación NODO: "+store.peerName(id)+"\n\n");
+                        JSONArray arr=store.messages(id);
+                        for(int j=0;j<arr.length();j++){
+                            JSONObject m=arr.optJSONObject(j);
+                            if(m!=null)output.append(m.optBoolean("out")?"Yo: ":"Contacto: ")
+                                .append(m.optString("kind").equals("text")?m.optString("body"):"["+m.optString("name")+"]").append("\n");
+                        }
+                        Intent share=new Intent(Intent.ACTION_SEND);share.setType("text/plain");
+                        share.putExtra(Intent.EXTRA_TEXT,output.toString());
+                        startActivity(Intent.createChooser(share,"Exportar conversación"));
+                    }).show();
             }).show();
-        }).show();
     }
     private void storageSettings(){
         long size=0;int files=0;
